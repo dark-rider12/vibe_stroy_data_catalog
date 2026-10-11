@@ -1,0 +1,20 @@
+{
+  "db_host": "localhost",
+  "db_port": "5432",
+  "db_user": "postgres",
+  "db_password": "YOUR_PASSWORD",
+  "databases": [
+    "ods",
+    "dds",
+    "dm"
+  ],
+  "schemas": [
+    "calc",
+    "public",
+    "sandbox_1",
+    "sandbox_2",
+    "sandbox_3",
+    "core"
+  ],
+  "output_file": "dist/index.html"
+}

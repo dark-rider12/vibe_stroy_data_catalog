@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+        <img src="static/logo.png" class="sidebar-logo" alt="Логотип">
+        <h2>Справочник DWH</h2>
+    </div>
+    <div class="sidebar-content"> <a href="#home" class="home-btn">🏠 Главная страница</a>
+        <ul id="tree"> {% for db_name, schemas in catalog.items() %} <li>
+                <details open>
+                    <summary><i class="icon ic-db"></i> {{ db_name }}</summary>
+                    {% set core_schemas = ['core', 'calc'] %}
+                    {% set system_schemas = [] %}
+                    {% for schema_name in schemas.keys() %}
+                        {% if schema_name | lower not in hidden_schemas and schema_name | lower not in core_schemas %}
+                            {% set _ = system_schemas.append(schema_name) %}
+                        {% endif %}
+                    {% endfor %}
+                    <ul>
+                        {% for schema_name, tables in schemas.items() %}
+                            {% if schema_name | lower not in hidden_schemas and schema_name | lower in core_schemas %} <li>
+                            <details>
+                                <summary>
+                                    {% if schema_name | lower == 'core' %}
+                                    <div class="sidebar-schema-node ln-core-{{ db_name | lower }}">{{ schema_name }}</div>
+                                    {% elif schema_name | lower == 'calc' %}
+                                    <div class="sidebar-schema-node ln-core-{{ db_name | lower }}">{{ schema_name }}</div>
+                                    {% else %}
+                                    <div class="sidebar-schema-node ln-{{ schema_name | lower }}">{{ schema_name }}</div>
+                                    {% endif %}
+                                </summary>
+                                <ul> {% for table_name, t_info in tables.items() %} <li> <a
+                                            href="#{{ db_name }}-{{ schema_name }}-{{ table_name }}"> {% if t_info.type
+                                            == 'v' or t_info.type == 'm' %}<i class="icon ic-view"></i>{% else %}<i
+                                                class="icon ic-tbl"></i>{% endif %} {{ table_name }} </a> </li> {%
+                                    endfor %} </ul>
+                            </details>
+                        </li> {% endif %}
+                        {% endfor %}
+                        {% if system_schemas %}
+                        <li class="sidebar-systems-group">
+                            <details>
+                                <summary class="sidebar-group-label">Systems</summary>
+                                <ul>
+                                {% for schema_name, tables in schemas.items() %}
+                                    {% if schema_name | lower not in hidden_schemas and schema_name | lower not in core_schemas %}
+                                    {% set sys_idx = schema_name | schema_system_idx %}
+                                    <li>
+                                    <details>
+                                        <summary>
+                                            <div class="sidebar-schema-node ln-system-{{ sys_idx }}">{{ schema_name }}</div>
+                                        </summary>
+                                        <ul> {% for table_name, t_info in tables.items() %} <li> <a
+                                                    href="#{{ db_name }}-{{ schema_name }}-{{ table_name }}"> {% if t_info.type
+                                                    == 'v' or t_info.type == 'm' %}<i class="icon ic-view"></i>{% else %}<i
+                                                        class="icon ic-tbl"></i>{% endif %} {{ table_name }} </a> </li> {%
+                                            endfor %} </ul>
+                                    </details>
+                                    </li> {% endif %}
+                                {% endfor %}
+                                </ul>
+                            </details>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </details>
+            </li> {% endfor %} </ul>
+    </div>
+</div>
+<div class="resizer" id="resizer"></div>
+<button class="sidebar-toggle-btn" id="sidebarToggleBtn" onclick="toggleSidebar()" title="Свернуть боковую панель">
+    <svg viewBox="0 0 24 24">
+        <polyline points="15 18 9 12 15 6"></polyline>
+    </svg>
+</button>
+<div class="content">
+    <div class="search-header">
+        <div class="search-header-left"></div>
+        <div class="search-center">
+            <div class="search-scope-select">
+                <select id="search-scope-select" title="Область поиска">
+                    <option value="catalog" selected>Каталог</option>
+                    <option value="expressions">Алгоритм</option>
+                    <option value="scripts">Скрипт</option>
+                </select>
+            </div>
+            <div class="search-wrapper"> <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg> <input type="text" id="search-input" class="search-box"
+                    placeholder="Поиск таблиц, полей и описаний..." autocomplete="off"> </div>
+            <label class="search-filter-label">
+                <input type="checkbox" id="exclude-ods-checkbox">
+                Не искать в ods
+            </label>
+        </div>
+        <span class="build-timestamp">🔄 Обновлено:<br>{{ build_time }}</span>
+    </div>
+
+    <div class="main-body">
+        <div id="search-count" style="display: none;"></div>
+        <div id="search-results"></div>
+
+        <div id="welcome-screen">
+            <!-- Markdown конвертированный в HTML -->
+            {{ welcome_html | safe }}
+        </div>
+
+        {% for db_name, schemas in catalog.items() %}
+        {% for schema_name, tables in schemas.items() %}
+        {% for table_name, table_info in tables.items() %}
+        {% set unique_id = db_name ~ '-' ~ schema_name ~ '-' ~ table_name %}
+        <template id="tpl-{{ unique_id }}">{% include 'table.html' %}</template>
+        {% endfor %}
+        {% endfor %}
+        {% endfor %}
+    </div>
+
+</div> {% endblock %}

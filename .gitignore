@@ -1,0 +1,43 @@
+# Конфигурация БД и секреты
+config_catalog_gemini.json
+config*.json
+!config_catalog.example.json
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Каталог сборки
+dist/
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Вспомогательные директории агентов и тестов
+.playwright-mcp/
+.agents/
+scratch/
+implementation_plan.md
+tests/.run_test.cjs
+
+# Системные файлы ОС
+Thumbs.db
+Desktop.ini
+.DS_Store

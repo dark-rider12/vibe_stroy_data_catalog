@@ -1,0 +1,680 @@
+export const catalogData = {
+  DWH: {
+    dds: {
+      account_detail: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "account_id", type: "bigint", description: null },
+          { name: "account_number", type: "text", description: null },
+          { name: "account_type", type: "text", description: null },
+          { name: "currency_cd", type: "text", description: null },
+          { name: "open_date", type: "date", description: null },
+          { name: "close_date", type: "date", description: null },
+          { name: "balance_amt", type: "numeric(18,2)", description: null },
+          { name: "account_status", type: "text", description: null },
+          { name: "contract_id", type: "bigint", description: null },
+          { name: "contract_number", type: "text", description: null },
+          { name: "contract_type", type: "text", description: null },
+          { name: "contract_start_date", type: "date", description: null },
+          { name: "contract_end_date", type: "date", description: null },
+          { name: "interest_rate", type: "numeric(5,2)", description: null },
+          { name: "contract_status", type: "text", description: null },
+          { name: "client_id", type: "bigint", description: null },
+          { name: "client_full_name", type: "text", description: null },
+          { name: "birth_date", type: "date", description: null },
+          { name: "phone", type: "text", description: null },
+          { name: "email", type: "text", description: null },
+          { name: "client_status", type: "text", description: null },
+          { name: "account_age_days", type: "integer", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {
+          account_id: {
+            expression: "abs_account.account_id",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "account_id" }],
+          },
+          account_number: {
+            expression: "abs_account.account_number",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "account_number" }],
+          },
+          account_type: {
+            expression: "abs_account.account_type",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "account_type" }],
+          },
+          currency_cd: {
+            expression: "abs_account.currency_cd",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "currency_cd" }],
+          },
+          open_date: {
+            expression: "abs_account.open_date",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "open_date" }],
+          },
+          close_date: {
+            expression: "abs_account.close_date",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "close_date" }],
+          },
+          balance_amt: {
+            expression: "abs_account.balance_amt",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "balance_amt" }],
+          },
+          account_status: {
+            expression: "abs_account.account_status",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "account_status" }],
+          },
+          contract_id: {
+            expression: "abs_contract.contract_id",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "contract_id" }],
+          },
+          contract_number: {
+            expression: "abs_contract.contract_number",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "contract_number" }],
+          },
+          contract_type: {
+            expression: "abs_contract.contract_type",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "contract_type" }],
+          },
+          contract_start_date: {
+            expression: "abs_contract.start_date",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "start_date" }],
+          },
+          contract_end_date: {
+            expression: "abs_contract.end_date",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "end_date" }],
+          },
+          interest_rate: {
+            expression: "abs_contract.interest_rate",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "interest_rate" }],
+          },
+          contract_status: {
+            expression: "abs_contract.contract_status",
+            sources: [{ source_table: "DWH.ods.abs_contract", source_column: "contract_status" }],
+          },
+          client_id: {
+            expression: "crm_client.client_id",
+            sources: [{ source_table: "DWH.ods.crm_client", source_column: "client_id" }],
+          },
+          client_full_name: {
+            expression: "crm_client.last_name || ' ' || crm_client.first_name || ' ' || crm_client.middle_name",
+            sources: [
+              { source_table: "DWH.ods.crm_client", source_column: "middle_name" },
+              { source_table: "DWH.ods.crm_client", source_column: "first_name" },
+              { source_table: "DWH.ods.crm_client", source_column: "last_name" },
+            ],
+          },
+          birth_date: {
+            expression: "crm_client.birth_date",
+            sources: [{ source_table: "DWH.ods.crm_client", source_column: "birth_date" }],
+          },
+          phone: {
+            expression: "crm_client.phone",
+            sources: [{ source_table: "DWH.ods.crm_client", source_column: "phone" }],
+          },
+          email: {
+            expression: "crm_client.email",
+            sources: [{ source_table: "DWH.ods.crm_client", source_column: "email" }],
+          },
+          client_status: {
+            expression: "crm_client.status_cd",
+            sources: [{ source_table: "DWH.ods.crm_client", source_column: "status_cd" }],
+          },
+          account_age_days: {
+            expression: "CURRENT_DATE - abs_account.open_date",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "open_date" }],
+          },
+        },
+        lineage: {
+          upstream: ["DWH.ods.abs_contract", "DWH.ods.abs_account", "DWH.ods.crm_client"],
+          downstream: ["DWH.dm.account_activity", "DWH.dds.client_account_profile"],
+        },
+        sources: "abs, crm",
+      },
+      card_detail: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "card_id", type: "bigint", description: null },
+          { name: "account_id", type: "bigint", description: null },
+          { name: "masked_card_number", type: "text", description: null },
+          { name: "card_system", type: "text", description: null },
+          { name: "issue_date", type: "date", description: null },
+          { name: "expiry_date", type: "date", description: null },
+          { name: "card_status", type: "text", description: null },
+          { name: "validity_status", type: "text", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {
+          card_id: {
+            expression: "abs_card.card_id",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "card_id" }],
+          },
+          account_id: {
+            expression: "abs_card.account_id",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "account_id" }],
+          },
+          masked_card_number: {
+            expression: "LEFT(abs_card.card_number, 6) || '******' || RIGHT(abs_card.card_number, 4)",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "card_number" }],
+          },
+          card_system: {
+            expression: "abs_card.card_system",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "card_system" }],
+          },
+          issue_date: {
+            expression: "abs_card.issue_date",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "issue_date" }],
+          },
+          expiry_date: {
+            expression: "abs_card.expiry_date",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "expiry_date" }],
+          },
+          card_status: {
+            expression: "abs_card.card_status",
+            sources: [{ source_table: "DWH.ods.abs_card", source_column: "card_status" }],
+          },
+          validity_status: {
+            expression: "CASE WHEN abs_card.expiry_date >= CURRENT_DATE AND abs_card.card_status = 'active' THEN 'valid' ELSE 'invalid' END",
+            sources: [
+              { source_table: "DWH.ods.abs_card", source_column: "expiry_date" },
+              { source_table: "DWH.ods.abs_card", source_column: "card_status" },
+            ],
+          },
+        },
+        lineage: { upstream: ["DWH.ods.abs_card"], downstream: [] },
+        sources: "abs",
+      },
+      client_account_profile: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "account_id", type: "bigint", description: null },
+          { name: "account_number", type: "text", description: null },
+          { name: "client_id", type: "bigint", description: null },
+          { name: "client_full_name", type: "text", description: null },
+          { name: "client_status", type: "text", description: null },
+          { name: "active_passport", type: "text", description: null },
+          { name: "client_city", type: "text", description: null },
+          { name: "address_type", type: "text", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {
+          account_id: {
+            expression: "account_detail.account_id",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "account_id" }],
+          },
+          account_number: {
+            expression: "account_detail.account_number",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "account_number" }],
+          },
+          client_id: {
+            expression: "account_detail.client_id",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "client_id" }],
+          },
+          client_full_name: {
+            expression: "account_detail.client_full_name",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "client_full_name" }],
+          },
+          client_status: {
+            expression: "account_detail.client_status",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "client_status" }],
+          },
+          active_passport: {
+            expression: "crm_client_document.doc_series || ' ' || crm_client_document.doc_number",
+            sources: [
+              { source_table: "DWH.ods.crm_client_document", source_column: "doc_series" },
+              { source_table: "DWH.ods.crm_client_document", source_column: "doc_number" },
+            ],
+          },
+          client_city: {
+            expression: "crm_client_address.city",
+            sources: [{ source_table: "DWH.ods.crm_client_address", source_column: "city" }],
+          },
+          address_type: {
+            expression: "crm_client_address.address_type",
+            sources: [{ source_table: "DWH.ods.crm_client_address", source_column: "address_type" }],
+          },
+        },
+        lineage: {
+          upstream: ["DWH.dds.account_detail", "DWH.ods.crm_client_address", "DWH.ods.crm_client_document"],
+          downstream: ["DWH.dm.client_behavior_summary"],
+        },
+        sources: "abs, crm",
+      },
+      transaction_detail: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "transaction_id", type: "bigint", description: null },
+          { name: "account_id", type: "bigint", description: null },
+          { name: "account_number", type: "text", description: null },
+          { name: "transaction_ts", type: "timestamp without time zone", description: null },
+          { name: "transaction_date", type: "date", description: null },
+          { name: "transaction_type", type: "text", description: null },
+          { name: "amount_amt", type: "numeric(18,2)", description: null },
+          { name: "signed_amount_amt", type: "numeric", description: null },
+          { name: "currency_cd", type: "text", description: null },
+          { name: "merchant_name", type: "text", description: null },
+          { name: "description_txt", type: "text", description: null },
+          { name: "channel_cd", type: "text", description: null },
+          { name: "transaction_status", type: "text", description: null },
+          { name: "operation_category", type: "text", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {
+          transaction_id: {
+            expression: "abs_transaction.transaction_id",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "transaction_id" }],
+          },
+          account_id: {
+            expression: "abs_transaction.account_id",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "account_id" }],
+          },
+          account_number: {
+            expression: "abs_account.account_number",
+            sources: [{ source_table: "DWH.ods.abs_account", source_column: "account_number" }],
+          },
+          transaction_ts: {
+            expression: "abs_transaction.transaction_ts",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "transaction_ts" }],
+          },
+          transaction_date: {
+            expression: "abs_transaction.transaction_ts::date",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "transaction_ts" }],
+          },
+          transaction_type: {
+            expression: "abs_transaction.transaction_type",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "transaction_type" }],
+          },
+          amount_amt: {
+            expression: "abs_transaction.amount_amt",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "amount_amt" }],
+          },
+          signed_amount_amt: {
+            expression: "CASE WHEN abs_transaction.transaction_type = 'debit' THEN -abs_transaction.amount_amt ELSE abs_transaction.amount_amt END",
+            sources: [
+              { source_table: "DWH.ods.abs_transaction", source_column: "transaction_type" },
+              { source_table: "DWH.ods.abs_transaction", source_column: "amount_amt" },
+            ],
+          },
+          currency_cd: {
+            expression: "abs_transaction.currency_cd",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "currency_cd" }],
+          },
+          merchant_name: {
+            expression: "abs_transaction.merchant_name",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "merchant_name" }],
+          },
+          description_txt: {
+            expression: "abs_transaction.description_txt",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "description_txt" }],
+          },
+          channel_cd: {
+            expression: "abs_transaction.channel_cd",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "channel_cd" }],
+          },
+          transaction_status: {
+            expression: "abs_transaction.transaction_status",
+            sources: [{ source_table: "DWH.ods.abs_transaction", source_column: "transaction_status" }],
+          },
+          operation_category: {
+            expression: "CASE WHEN abs_transaction.merchant_name IS NOT NULL THEN 'merchant' WHEN abs_transaction.description_txt ILIKE '%перевод%' THEN 'transfer' ELSE 'other' END",
+            sources: [
+              { source_table: "DWH.ods.abs_transaction", source_column: "description_txt" },
+              { source_table: "DWH.ods.abs_transaction", source_column: "merchant_name" },
+            ],
+          },
+        },
+        lineage: {
+          upstream: ["DWH.ods.abs_account", "DWH.ods.abs_transaction"],
+          downstream: ["DWH.dm.account_activity", "DWH.dm.client_behavior_summary"],
+        },
+        sources: "abs",
+      },
+    },
+    dm: {
+      account_activity: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "transaction_id", type: "bigint", description: null },
+          { name: "transaction_date", type: "date", description: null },
+          { name: "transaction_ts", type: "timestamp without time zone", description: null },
+          { name: "client_id", type: "bigint", description: null },
+          { name: "client_full_name", type: "text", description: null },
+          { name: "contract_id", type: "bigint", description: null },
+          { name: "contract_number", type: "text", description: null },
+          { name: "contract_type", type: "text", description: null },
+          { name: "account_id", type: "bigint", description: null },
+          { name: "account_number", type: "text", description: null },
+          { name: "account_type", type: "text", description: null },
+          { name: "currency_cd", type: "text", description: null },
+          { name: "transaction_type", type: "text", description: null },
+          { name: "amount_amt", type: "numeric(18,2)", description: null },
+          { name: "signed_amount_amt", type: "numeric", description: null },
+          { name: "operation_category", type: "text", description: null },
+          { name: "channel_cd", type: "text", description: null },
+          { name: "transaction_status", type: "text", description: null },
+          { name: "operation_context", type: "text", description: null },
+          { name: "operation_details", type: "text", description: null },
+          { name: "current_balance_amt", type: "numeric(18,2)", description: null },
+          { name: "interest_rate", type: "numeric(5,2)", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {
+          transaction_id: {
+            expression: "transaction_detail.transaction_id",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_id" }],
+          },
+          transaction_date: {
+            expression: "transaction_detail.transaction_date",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_date" }],
+          },
+          transaction_ts: {
+            expression: "transaction_detail.transaction_ts",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_ts" }],
+          },
+          client_id: {
+            expression: "account_detail.client_id",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "client_id" }],
+          },
+          client_full_name: {
+            expression: "account_detail.client_full_name",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "client_full_name" }],
+          },
+          contract_id: {
+            expression: "account_detail.contract_id",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "contract_id" }],
+          },
+          contract_number: {
+            expression: "account_detail.contract_number",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "contract_number" }],
+          },
+          contract_type: {
+            expression: "account_detail.contract_type",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "contract_type" }],
+          },
+          account_id: {
+            expression: "account_detail.account_id",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "account_id" }],
+          },
+          account_number: {
+            expression: "account_detail.account_number",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "account_number" }],
+          },
+          account_type: {
+            expression: "account_detail.account_type",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "account_type" }],
+          },
+          currency_cd: {
+            expression: "account_detail.currency_cd",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "currency_cd" }],
+          },
+          transaction_type: {
+            expression: "transaction_detail.transaction_type",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_type" }],
+          },
+          amount_amt: {
+            expression: "transaction_detail.amount_amt",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "amount_amt" }],
+          },
+          signed_amount_amt: {
+            expression: "transaction_detail.signed_amount_amt",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "signed_amount_amt" }],
+          },
+          operation_category: {
+            expression: "transaction_detail.operation_category",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "operation_category" }],
+          },
+          channel_cd: {
+            expression: "transaction_detail.channel_cd",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "channel_cd" }],
+          },
+          transaction_status: {
+            expression: "transaction_detail.transaction_status",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_status" }],
+          },
+          operation_context: {
+            expression: "account_detail.contract_number || ' | ' || account_detail.client_full_name || ' | ' || transaction_detail.merchant_name",
+            sources: [
+              { source_table: "DWH.dds.account_detail", source_column: "contract_number" },
+              { source_table: "DWH.dds.transaction_detail", source_column: "merchant_name" },
+              { source_table: "DWH.dds.account_detail", source_column: "client_full_name" },
+            ],
+          },
+          operation_details: {
+            expression: "transaction_detail.description_txt || ' [' || account_detail.account_type || ', ' || transaction_detail.operation_category || ']'",
+            sources: [
+              { source_table: "DWH.dds.transaction_detail", source_column: "description_txt" },
+              { source_table: "DWH.dds.account_detail", source_column: "account_type" },
+              { source_table: "DWH.dds.transaction_detail", source_column: "operation_category" },
+            ],
+          },
+          current_balance_amt: {
+            expression: "account_detail.balance_amt",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "balance_amt" }],
+          },
+          interest_rate: {
+            expression: "account_detail.interest_rate",
+            sources: [{ source_table: "DWH.dds.account_detail", source_column: "interest_rate" }],
+          },
+        },
+        lineage: {
+          upstream: ["DWH.dds.account_detail", "DWH.dds.transaction_detail"],
+          downstream: [],
+        },
+        sources: "abs, crm",
+      },
+      client_behavior_summary: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "client_id", type: "bigint", description: null },
+          { name: "client_full_name", type: "text", description: null },
+          { name: "client_city", type: "text", description: null },
+          { name: "active_passport", type: "text", description: null },
+          { name: "total_trx_count", type: "bigint", description: null },
+          { name: "total_credit_amt", type: "numeric", description: null },
+          { name: "total_debit_amt", type: "numeric", description: null },
+          { name: "last_transaction_date", type: "date", description: null },
+          { name: "used_channels", type: "text", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {
+          client_id: {
+            expression: "client_account_profile.client_id",
+            sources: [{ source_table: "DWH.dds.client_account_profile", source_column: "client_id" }],
+          },
+          client_full_name: {
+            expression: "client_account_profile.client_full_name",
+            sources: [{ source_table: "DWH.dds.client_account_profile", source_column: "client_full_name" }],
+          },
+          client_city: {
+            expression: "client_account_profile.client_city",
+            sources: [{ source_table: "DWH.dds.client_account_profile", source_column: "client_city" }],
+          },
+          active_passport: {
+            expression: "client_account_profile.active_passport",
+            sources: [{ source_table: "DWH.dds.client_account_profile", source_column: "active_passport" }],
+          },
+          total_trx_count: {
+            expression: "COUNT(transaction_detail.transaction_id)",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_id" }],
+          },
+          total_credit_amt: {
+            expression: "SUM(CASE WHEN transaction_detail.transaction_type = 'credit' THEN transaction_detail.amount_amt ELSE 0 END)",
+            sources: [
+              { source_table: "DWH.dds.transaction_detail", source_column: "transaction_type" },
+              { source_table: "DWH.dds.transaction_detail", source_column: "amount_amt" },
+            ],
+          },
+          total_debit_amt: {
+            expression: "SUM(CASE WHEN transaction_detail.transaction_type = 'debit' THEN transaction_detail.amount_amt ELSE 0 END)",
+            sources: [
+              { source_table: "DWH.dds.transaction_detail", source_column: "transaction_type" },
+              { source_table: "DWH.dds.transaction_detail", source_column: "amount_amt" },
+            ],
+          },
+          last_transaction_date: {
+            expression: "MAX(transaction_detail.transaction_date)",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "transaction_date" }],
+          },
+          used_channels: {
+            expression: "STRING_AGG(DISTINCT transaction_detail.channel_cd, ', ' ORDER BY transaction_detail.channel_cd)",
+            sources: [{ source_table: "DWH.dds.transaction_detail", source_column: "channel_cd" }],
+          },
+        },
+        lineage: {
+          upstream: ["DWH.dds.client_account_profile", "DWH.dds.transaction_detail"],
+          downstream: [],
+        },
+        sources: "abs, crm",
+      },
+    },
+    ods: {
+      abs_account: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "account_id", type: "bigint", description: null },
+          { name: "contract_id", type: "bigint", description: null },
+          { name: "account_number", type: "text", description: null },
+          { name: "account_type", type: "text", description: null },
+          { name: "currency_cd", type: "text", description: null },
+          { name: "open_date", type: "date", description: null },
+          { name: "close_date", type: "date", description: null },
+          { name: "balance_amt", type: "numeric(18,2)", description: null },
+          { name: "account_status", type: "text", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.account_detail", "DWH.dds.transaction_detail"] },
+        sources: "",
+      },
+      abs_card: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "card_id", type: "bigint", description: null },
+          { name: "account_id", type: "bigint", description: null },
+          { name: "card_number", type: "text", description: null },
+          { name: "card_system", type: "text", description: null },
+          { name: "issue_date", type: "date", description: null },
+          { name: "expiry_date", type: "date", description: null },
+          { name: "card_status", type: "text", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.card_detail"] },
+        sources: "",
+      },
+      abs_contract: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "contract_id", type: "bigint", description: null },
+          { name: "client_id", type: "bigint", description: null },
+          { name: "contract_number", type: "text", description: null },
+          { name: "contract_type", type: "text", description: null },
+          { name: "start_date", type: "date", description: null },
+          { name: "end_date", type: "date", description: null },
+          { name: "interest_rate", type: "numeric(5,2)", description: null },
+          { name: "contract_status", type: "text", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.account_detail"] },
+        sources: "",
+      },
+      abs_transaction: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "transaction_id", type: "bigint", description: null },
+          { name: "account_id", type: "bigint", description: null },
+          { name: "transaction_ts", type: "timestamp without time zone", description: null },
+          { name: "transaction_type", type: "text", description: null },
+          { name: "amount_amt", type: "numeric(18,2)", description: null },
+          { name: "currency_cd", type: "text", description: null },
+          { name: "merchant_name", type: "text", description: null },
+          { name: "description_txt", type: "text", description: null },
+          { name: "channel_cd", type: "text", description: null },
+          { name: "transaction_status", type: "text", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.transaction_detail"] },
+        sources: "",
+      },
+      crm_client: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "client_id", type: "bigint", description: null },
+          { name: "client_external_id", type: "text", description: null },
+          { name: "first_name", type: "text", description: null },
+          { name: "last_name", type: "text", description: null },
+          { name: "middle_name", type: "text", description: null },
+          { name: "birth_date", type: "date", description: null },
+          { name: "phone", type: "text", description: null },
+          { name: "email", type: "text", description: null },
+          { name: "registration_date", type: "date", description: null },
+          { name: "status_cd", type: "text", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.account_detail"] },
+        sources: "",
+      },
+      crm_client_address: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "address_id", type: "bigint", description: null },
+          { name: "client_id", type: "bigint", description: null },
+          { name: "address_type", type: "text", description: null },
+          { name: "country", type: "text", description: null },
+          { name: "city", type: "text", description: null },
+          { name: "street", type: "text", description: null },
+          { name: "building", type: "text", description: null },
+          { name: "is_active", type: "boolean", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.client_account_profile"] },
+        sources: "",
+      },
+      crm_client_document: {
+        type: "r",
+        description: null,
+        columns: [
+          { name: "document_id", type: "bigint", description: null },
+          { name: "client_id", type: "bigint", description: null },
+          { name: "doc_type", type: "text", description: null },
+          { name: "doc_series", type: "text", description: null },
+          { name: "doc_number", type: "text", description: null },
+          { name: "issue_date", type: "date", description: null },
+          { name: "issuer_name", type: "text", description: null },
+          { name: "is_active", type: "boolean", description: null },
+          { name: "source_system", type: "text", description: null },
+          { name: "load_dttm", type: "timestamp without time zone", description: null },
+        ],
+        table_lineage: [],
+        column_lineage: {},
+        lineage: { upstream: [], downstream: ["DWH.dds.client_account_profile"] },
+        sources: "",
+      },
+    },
+  },
+};

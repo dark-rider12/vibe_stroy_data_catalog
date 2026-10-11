@@ -1,0 +1,335 @@
+<div class="table-view" id="{{ unique_id }}">
+    <div class="breadcrumbs"> <b>{{ db_name }}</b> / {{ schema_name }} / {% if table_info.type in ('v', 'm') %}View{%
+        elif db_name|lower == 'dm' %}Витрина{% else %}Таблица{% endif %} </div>
+
+    <div class="title-wrapper" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <h2 class="table-title" style="margin: 0;">{{ table_name }}</h2>
+            <button class="copy-title-btn" onclick="copyText('{{ db_name }}.{{ schema_name }}.{{ table_name }}', this)"
+                title="Скопировать полное имя таблицы">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+            </button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            {% set has_empty_cols = table_info.columns | rejectattr('description') | list | length > 0 %}
+            {% if db_name|lower not in ('ods', 'dds') and has_empty_cols %}
+            <button class="fill-comments-btn" 
+                    onclick="fillDmComments('{{ unique_id }}', '{{ db_name }}', '{{ schema_name }}', '{{ table_name }}')"
+                    title="Протянуть описания колонок из слоёв-источников (1:1)">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 20h9"></path>
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+                Заполнить описания
+            </button>
+            {% elif db_name|lower == 'dds' and has_empty_cols %}
+            <button class="fill-comments-btn fill-comments-btn--dds" 
+                    onclick="fillDmComments('{{ unique_id }}', '{{ db_name }}', '{{ schema_name }}', '{{ table_name }}')"
+                    title="Протянуть описания колонок из таблиц-источников dds (1:1)">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 20h9"></path>
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+                Заполнить описания
+            </button>
+            {% endif %}
+            {% if db_name != 'ods' %}
+            <button class="export-btn" onclick="exportTableToHTML('{{ unique_id }}', '{{ db_name }}', '{{ schema_name }}', '{{ table_name }}', '{{ table_info.type }}')">
+                📄 Экспорт в файл
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="table-description">
+        {% if table_info.description %} {{ table_info.description }} {% else %} <span class="empty-desc">Описание
+            отсутствует</span> {% endif %}
+    </div>
+
+    <div class="table-sources" style="margin-bottom: 20px; font-size: 15px; color: var(--text-dark);">
+        <b>Источники:</b> {{ table_info.sources }}{% if table_info.script_updated_at %}&nbsp;&nbsp;&nbsp;<b>Дата обновления скрипта:</b> {{ table_info.script_updated_at }}{% endif %}
+    </div>
+
+    <div class="tabs-nav-bar">
+        <div class="tabs-nav">
+            <button class="tab-btn active" onclick="switchTab(this, 'pane-cols', '{{ unique_id }}')">Колонки ({{
+                table_info.columns|length }})</button>
+            <button class="tab-btn"
+                onclick="switchTab(this, 'pane-lineage', '{{ unique_id }}'); renderLineage('{{ unique_id }}')">Lineage</button>
+            {% if db_name != 'ods' %}
+            <button class="tab-btn" onclick="switchTab(this, 'pane-script', '{{ unique_id }}')">Скрипт</button>
+            {% endif %}
+            <button class="tab-btn" onclick="switchTab(this, 'pane-dq', '{{ unique_id }}')">Data Quality</button>
+            <button class="tab-btn" id="tab-col-lineage-{{ unique_id }}" style="display: none;"
+                onclick="switchTab(this, 'pane-col-lineage', '{{ unique_id }}')">Column Lineage</button>
+        </div>
+        <label class="lineage-stale-toggle" id="stale-toggle-{{ unique_id }}" style="display: none;" title="Включить анализ актуальности и подсветку устаревших веток">
+            <input type="checkbox" id="stale-cb-{{ unique_id }}" onchange="window.toggleStaleMode('{{ unique_id }}', this.checked)">
+            <span class="stale-toggle-custom-cb"></span>
+            <span class="stale-toggle-text">The Time Has Come</span>
+        </label>
+    </div>
+
+    <div class="tab-pane pane-cols active">
+        <div class="table-actions">
+            <button class="copy-btn" onclick="copyTableData('{{ unique_id }}', this)">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Скопировать всю таблицу
+            </button>
+            <div class="col-filter" id="col-filter-{{ unique_id }}" title="Поиск по названию или описанию колонки (Ctrl+F)">
+                <svg class="col-filter-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" class="col-filter-input" placeholder="Поиск по названию или описанию..." autocomplete="off">
+                <span class="col-filter-count"></span>
+                <button class="col-filter-close" title="Сбросить фильтр (Esc)" aria-label="Сбросить фильтр">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <table id="tbl-{{ unique_id }}" class="resizable-table">
+            <colgroup>
+                <col class="col-resize-0" style="width: 40px; min-width: 40px; max-width: 40px;">
+                <col class="col-resize-1" style="width: 18%;">
+                <col class="col-resize-2" style="width: 11%;">
+                <col class="col-resize-3" style="width: 13%;">
+                <col class="col-resize-4" style="width: 24%;">
+                <col class="col-resize-5" style="width: 10%;">
+                <col class="col-resize-6" style="width: 10%;">
+                <col class="col-resize-7" style="width: 130px;">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th style="width: 40px; min-width: 40px; max-width: 40px; text-align: center;">№<br>п/п</th>
+                    <th>Функц. наим-е атрибута</th>
+                    <th>Тип данных</th>
+                    <th>Бизнес описание</th>
+                    <th>Алгоритм заполнения</th>
+                    <th>Система источник</th>
+                    <th>Обязательность заполнения</th>
+                    <th>Column lineage</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for col in table_info.columns %}
+                {% set col_expr_data = table_info.column_lineage.get(col.name|lower) %}
+                {% if col_expr_data and col_expr_data is mapping %}
+                    {% set col_expr = col_expr_data.get('expression', '') %}
+                {% else %}
+                    {% set col_expr = '' %}
+                {% endif %}
+                <tr class="col-row">
+                    <td class="col-num">{{ loop.index }}</td>
+                    <td class="col-name">{{ col.name }}</td>
+                    <td><span class="type-badge">{{ col.type }}</span></td>
+                    <td class="col-desc">{% if col.description %} {{ col.description }} {% endif %}</td>
+                    <td class="expr-td">
+                        {% if col_expr %}
+                        <code class="expr-cell" title="{{ col_expr }}">{{ col_expr }}</code>
+                        {% endif %}
+                    </td>
+                    <td>{% if col.sources %}<span class="source-badge">{{ col.sources }}</span>{% endif %}</td>
+                    <td>{% if col.notnull %}<span class="notnull-badge yes">Да</span>{% else %}<span class="notnull-badge no">Нет</span>{% endif %}</td>
+                    <td class="col-actions">
+                        <button class="col-lineage-btn" title="Показать Lineage колонки"
+                            onclick="openColumnLineage('{{ unique_id }}', '{{ col.name }}')">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <circle cx="18" cy="5" r="3"></circle>
+                                <circle cx="6" cy="12" r="3"></circle>
+                                <circle cx="18" cy="19" r="3"></circle>
+                                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+
+
+    <div class="tab-pane pane-lineage">
+        <div class="lineage-loading-spinner" style="display: none;">
+            <div class="loading-bar loading-bar--indeterminate">
+                <div class="loading-bar__track"><div class="loading-bar__fill"></div></div>
+                <div class="loading-bar__label">Построение схемы Data Lineage…</div>
+            </div>
+        </div>
+        <div class="empty-pane">Здесь будет визуализация Data Lineage.</div>
+    </div>
+
+    {% if db_name != 'ods' %}
+    <div class="tab-pane pane-script">
+        {% if table_info.sql_script or table_info.sql_script_extra %}
+            {% if table_info.is_metadata_ddl %}
+            <div class="metadata-warning-banner">
+                <span class="warning-icon">⚙️</span>
+                <div class="warning-text">
+                    <strong>Системные метаданные:</strong> Оригинальный скрипт трансформации в <code>sql_inventory</code> отсутствует. Выведены ограничения, комментарии и индексы из БД.
+                </div>
+            </div>
+            {% endif %}
+            <div class="table-actions">
+                <button class="copy-btn" onclick="copyScriptContent('{{ unique_id }}', this)">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    Копировать скрипт
+                </button>
+            </div>
+            <pre class="ddl-block table-script-block" id="script-{{ unique_id }}"><code>{% if table_info.sql_script %}{{ table_info.sql_script | e }}{% endif %}{% if table_info.sql_script_extra %}{% if table_info.sql_script %}
+
+
+{% endif %}{{ table_info.sql_script_extra | e }}{% endif %}</code></pre>
+        {% else %}
+            <div class="empty-pane">Скрипт для этой таблицы не найден в public.sql_inventory. Дополнительные метаданные (ограничения, комментарии, индексы) также отсутствуют.</div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="tab-pane pane-col-lineage">
+        <div class="lineage-loading-spinner" style="display: none;">
+            <div class="app-spinner"></div>
+        </div>
+        <div class="empty-pane">Здесь будет визуализация Column-Level Lineage.</div>
+    </div>
+
+    <div class="tab-pane pane-dq">
+        {% if table_info.dq_info %}
+        <div class="dq-cards-row">
+            <div class="dq-card">
+                <div class="dq-card-header">
+                    <div class="dq-card-title-group">
+                        <div class="dq-card-title">Дубли по ID</div>
+                        <div class="dq-badge" id="dq-badge-{{ unique_id }}" style="{% if not table_info.dq_info.badge_type %}display: none;{% endif %}">
+                            <svg class="dq-badge-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                            </svg>
+                            <span id="dq-badge-text-{{ unique_id }}">{{ table_info.dq_info.badge_type or '' }}</span>
+                        </div>
+                    </div>
+                    <div class="dq-field-picker-box">
+                        <label class="dq-picker-label" for="dq-select-{{ unique_id }}">Выбрать другое поле таблицы:</label>
+                        <select class="dq-col-select" id="dq-select-{{ unique_id }}" data-constraints="{{ table_info.dq_info.col_constraints_json | e }}" data-db="{{ db_name }}" data-schema="{{ schema_name }}" data-table="{{ table_name }}" onchange="generateDqScript('{{ unique_id }}', '{{ db_name }}', '{{ schema_name }}', '{{ table_name }}')">
+                            {% for col in table_info.columns %}
+                            <option value="{{ col.name }}" {% if col.name == table_info.dq_info.id_column %}selected{% endif %}>{{ col.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="dq-card-subtext" id="dq-subtext-{{ unique_id }}">
+                    <code>{{ table_info.dq_info.id_column }}</code> — {% if table_info.dq_info.is_first_id %}первое поле с постфиксом <code>_id</code>{% else %}выбранное поле для проверки{% endif %}.
+                </div>
+                <div class="dq-code-box" id="dq-script-{{ unique_id }}">
+                    <pre><code>{{ table_info.dq_info.sql_script }}</code></pre>
+                </div>
+                <div class="dq-actions">
+                    <button class="dq-copy-btn" onclick="copyDqScript('dq-script-{{ unique_id }}', this)">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Копировать скрипт
+                    </button>
+                </div>
+            </div>
+
+            <!-- Проверка заполненности поля -->
+            <div class="dq-card">
+            <div class="dq-card-header">
+                <div class="dq-card-title-group">
+                    <div class="dq-card-title">Проверка заполненности поля</div>
+                </div>
+                <div class="dq-field-picker-box">
+                    <label class="dq-picker-label" for="dq-fill-select-{{ unique_id }}">Выбрать поле таблицы:</label>
+                    <select class="dq-col-select" id="dq-fill-select-{{ unique_id }}" data-db="{{ db_name }}" data-schema="{{ schema_name }}" data-table="{{ table_name }}" onchange="generateFillDqScript('{{ unique_id }}', '{{ db_name }}', '{{ schema_name }}', '{{ table_name }}')">
+                        {% for col in table_info.columns %}
+                        <option value="{{ col.name }}" {% if loop.index0 == 0 %}selected{% endif %}>{{ col.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="dq-card-subtext" id="dq-fill-subtext-{{ unique_id }}">
+                <code id="dq-fill-colname-{{ unique_id }}">{{ table_info.columns[0].name if table_info.columns }}</code> — выбранное поле для проверки заполненности.
+            </div>
+            <div class="dq-code-box" id="dq-fill-script-{{ unique_id }}">
+                <pre><code id="dq-fill-script-code-{{ unique_id }}"></code></pre>
+            </div>
+            <div class="dq-actions">
+                <button class="dq-copy-btn" onclick="copyDqScript('dq-fill-script-{{ unique_id }}', this)">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    Копировать скрипт
+                </button>
+            </div>
+        </div>
+        </div>
+        
+        <!-- Защита от дублей -->
+        {% if table_info.dq_info and table_info.dq_info.duplicate_protection %}
+        <div class="dq-card">
+            <div class="dq-card-header">
+                <div class="dq-card-title-group">
+                    <div class="dq-card-title">Защита от дублей</div>
+                    {% set dp = table_info.dq_info.duplicate_protection %}
+                    {% if dp.has_unique_index and dp.has_unique_constraint %}
+                    <div class="dq-badge" style="display: inline-flex;">
+                        <svg class="dq-badge-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                        </svg>
+                        <span>Успешно</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% if not (dp.has_unique_index and dp.has_unique_constraint) %}
+            <div class="dq-code-box" id="dq-dup-script-{{ unique_id }}">
+                <pre><code>CREATE UNIQUE INDEX {{ dp.table_name }}_idx
+ON {{ dp.db_name }}.{{ dp.schema_name }}.{{ dp.table_name }} ({{ dp.first_col_name }})
+WHERE is_active = true;
+
+ALTER TABLE {{ dp.db_name }}.{{ dp.schema_name }}.{{ dp.table_name }}
+ADD CONSTRAINT {{ dp.table_name }}_unique_version
+UNIQUE ({{ dp.first_col_name }}, dwh_start_date);</code></pre>
+            </div>
+            <div class="dq-actions">
+                <button class="dq-copy-btn" onclick="copyDqScript('dq-dup-script-{{ unique_id }}', this)">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    Копировать скрипт
+                </button>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="dq-empty-info">
+            В таблице отсутствуют доступные колонки.
+        </div>
+        {% endif %}
+    </div>
+
+</div>

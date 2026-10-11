@@ -1,0 +1,26 @@
+{
+  "name": "applet",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "dependencies": {
+    "docxtemplater": "3.47.0",
+    "pizzip": "3.1.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.4"
+  },
+  "scripts": {
+    "build": "npm run build:js",
+    "build:js": "esbuild src/index.js --bundle --outfile=static/main.js --minify && node scripts/postbuild.js",
+    "build:html": "python3 generate_catalog.py",
+    "test": "npm run test:lineage",
+    "test:lineage": "esbuild tests/verify_lineages.js --bundle --outfile=tests/.run_test.cjs --platform=node && node tests/.run_test.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
