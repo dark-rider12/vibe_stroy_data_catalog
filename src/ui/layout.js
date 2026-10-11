@@ -213,10 +213,15 @@ export function switchTab(btn, paneClass, parentId) {
     topElements.forEach((el) => (el.style.display = ""));
   }
 
-  // Показываем переключатель "Time Machine" только на вкладке Table Lineage
+  // Показываем переключатель "Time Machine" и легенду только на вкладке Table Lineage
   const staleToggle = parent.querySelector(`#stale-toggle-${parentId}`);
   if (staleToggle) {
     staleToggle.style.display = paneClass === "pane-lineage" ? "inline-flex" : "none";
+  }
+  const staleLegend = parent.querySelector(`#stale-legend-${parentId}`) || parent.querySelector(".ln-stale-legend");
+  if (staleLegend) {
+    const isStaleActive = window.isStaleModeActive ? window.isStaleModeActive(parentId) : false;
+    staleLegend.style.display = (paneClass === "pane-lineage" && isStaleActive) ? "inline-flex" : "none";
   }
 
   // При переключении на вкладку "Колонки" пересчитываем позиции ресайзеров —

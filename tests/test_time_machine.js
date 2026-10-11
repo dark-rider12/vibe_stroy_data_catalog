@@ -41,6 +41,11 @@ const unique_id = "dds-core-account_detail";
 const mockChildren = [];
 const mockCanvas = {
   id: `canvas-${unique_id}`,
+  classList: {
+    add: () => {},
+    remove: () => {},
+    contains: () => false,
+  },
   closest: () => ({ classList: { contains: () => false } }),
   querySelectorAll: (selector) => {
     if (selector.includes(".ln-node:not(.ln-virtual)")) {

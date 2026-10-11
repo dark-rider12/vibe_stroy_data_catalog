@@ -237,8 +237,8 @@ export function applyStaleAnalysis(canvas, uniqueId) {
   // 7. Верхний счетчик проблемных веток
   renderStaleCounter(canvas, uniqueId, inst.staleNodes.size);
 
-  // 8. Легенда внизу слева
-  renderStaleLegend(canvas);
+  // 8. Легенда справа от чек-бокса "The Time Has Come"
+  renderStaleLegend(canvas, uniqueId);
 }
 
 /**
@@ -281,7 +281,7 @@ export function clearStaleAnalysis(canvas, uniqueId) {
 
   // Удаляем верхний счетчик и легенду
   canvas.querySelector(".ln-stale-counter")?.remove();
-  canvas.querySelector(".ln-stale-legend")?.remove();
+  removeStaleLegend(canvas, uniqueId);
 
   // Закрываем модальное окно, если открыто
   closeStaleModal(uniqueId);
@@ -305,13 +305,28 @@ function renderStaleCounter(canvas, uniqueId, count) {
 }
 
 /**
- * Отрисовка плашки с легендой в нижнем левом углу
+ * Удаление плашки с легендой
  */
-function renderStaleLegend(canvas) {
-  canvas.querySelector(".ln-stale-legend")?.remove();
+function removeStaleLegend(canvas, uniqueId) {
+  canvas?.querySelector(".ln-stale-legend")?.remove();
+  if (uniqueId) {
+    document.getElementById(`stale-legend-${uniqueId}`)?.remove();
+    const toggle = document.getElementById(`stale-toggle-${uniqueId}`);
+    toggle?.parentNode?.querySelector(".ln-stale-legend")?.remove();
+  }
+}
+
+/**
+ * Отрисовка плашки с легендой справа от переключателя "The Time Has Come"
+ */
+function renderStaleLegend(canvas, uniqueId) {
+  removeStaleLegend(canvas, uniqueId);
 
   const legendEl = document.createElement("div");
   legendEl.className = "ln-stale-legend";
+  if (uniqueId) {
+    legendEl.id = `stale-legend-${uniqueId}`;
+  }
   legendEl.innerHTML = `
     <div class="ln-stale-legend-item">
       <span class="ln-legend-line ln-legend-line--stale"></span>
@@ -326,7 +341,13 @@ function renderStaleLegend(canvas) {
       <span class="ln-legend-label">Узел с проблемой (требует пересчёта)</span>
     </div>
   `;
-  canvas.appendChild(legendEl);
+
+  const toggle = uniqueId ? document.getElementById(`stale-toggle-${uniqueId}`) : null;
+  if (toggle && toggle.parentNode) {
+    toggle.insertAdjacentElement("afterend", legendEl);
+  } else {
+    canvas.appendChild(legendEl);
+  }
 }
 
 /**

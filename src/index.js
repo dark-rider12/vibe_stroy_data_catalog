@@ -20,6 +20,7 @@ import {
 } from "./lineage/tableLineageRebuild.js";
 import {
   toggleStaleMode,
+  isStaleModeActive,
   openStaleModal,
   closeStaleModal,
 } from "./lineage/tableLineageStale.js";
@@ -50,6 +51,7 @@ window.selectAllEligibleDescendants = selectAllEligibleDescendants;
 window.resetRebuildFlow = resetRebuildFlow;
 window.openRebuildSqlModal = openRebuildSqlModal;
 window.toggleStaleMode = toggleStaleMode;
+window.isStaleModeActive = isStaleModeActive;
 window.openStaleModal = openStaleModal;
 window.closeStaleModal = closeStaleModal;
 

@@ -4862,37 +4862,48 @@ path.ln-edge-line.ln-edge-stale {
     border-radius: 10px;
 }
 
-/* Bottom-left legend */
+/* Stale Lineage Legend (placed right next to The Time Has Come toggle in tabs-nav-bar) */
 .ln-stale-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 16px;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    padding: 5px 14px;
+    border-radius: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    font-size: 12px;
+    color: #334155;
+    user-select: none;
+    animation: fadeIn 0.2s ease-out;
+    flex-wrap: wrap;
+}
+
+/* Fallback if attached directly into canvas (e.g. tests or standalone) */
+.lineage-canvas > .ln-stale-legend {
     position: absolute;
     bottom: 16px;
     left: 20px;
     z-index: 20;
-    background: rgba(255, 255, 255, 0.94);
-    backdrop-filter: blur(6px);
-    border: 1px solid #E2E8F0;
-    padding: 10px 14px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 11.5px;
-    color: #334155;
-    user-select: none;
-    animation: fadeIn 0.2s ease-out;
 }
 
 .ln-stale-legend-item {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
+    white-space: nowrap;
 }
 
 .ln-legend-line {
-    width: 20px;
+    width: 18px;
     height: 3px;
     border-radius: 2px;
+    flex-shrink: 0;
 }
 
 .ln-legend-line--stale {
@@ -4904,16 +4915,23 @@ path.ln-edge-line.ln-edge-stale {
 }
 
 .ln-legend-dot-badge {
-    width: 14px;
-    height: 14px;
+    width: 15px;
+    height: 15px;
     border-radius: 50%;
     background-color: #F59E0B;
     color: #FFFFFF;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     font-size: 9.5px;
     font-weight: 800;
+    flex-shrink: 0;
+}
+
+.ln-legend-label {
+    font-size: 12px;
+    color: #475569;
+    font-weight: 500;
 }
 
 /* Stale Popup (ПКМ) */
