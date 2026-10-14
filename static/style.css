@@ -5107,3 +5107,468 @@ path.ln-edge-line.ln-edge-stale {
     font-size: 13px;
 }
 
+/* ==========================================================================
+   AI Prompt & SQL Obfuscator (Alt + O)
+   ========================================================================== */
+
+.ai-obf-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(3px);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.ai-obf-modal {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 960px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--text-dark);
+}
+
+.ai-obf-header {
+    background: var(--bg-main);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.ai-obf-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ai-obf-shield-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(0, 85, 255, 0.1);
+    color: var(--accent-blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ai-obf-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-dark);
+}
+
+.ai-obf-subtitle {
+    font-size: 12px;
+    color: var(--text-gray);
+    margin-top: 2px;
+}
+
+.ai-obf-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ai-obf-hotkey-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: var(--text-gray);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.ai-obf-close-btn {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--text-gray);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.ai-obf-close-btn:hover {
+    background: #E2E8F0;
+    color: var(--text-dark);
+}
+
+.ai-obf-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    background: var(--white);
+    border-bottom: 1px solid var(--border);
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.ai-obf-tabs {
+    display: flex;
+    gap: 6px;
+}
+
+.ai-obf-tab-btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-gray);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ai-obf-tab-btn:hover {
+    color: var(--text-dark);
+    background: var(--bg-main);
+}
+
+.ai-obf-tab-btn.is-active {
+    background: rgba(0, 85, 255, 0.08);
+    color: var(--accent-blue);
+    border-color: rgba(0, 85, 255, 0.2);
+}
+
+.ai-obf-dialect-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12.5px;
+    color: var(--text-gray);
+}
+
+.ai-obf-dialect-label {
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.ai-obf-radio-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--text-dark);
+}
+
+.ai-obf-radio-label input {
+    cursor: pointer;
+    accent-color: var(--accent-blue);
+}
+
+.ai-obf-body {
+    padding: 18px 20px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.ai-obf-tab-pane {
+    display: none;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.ai-obf-tab-pane.is-active {
+    display: flex;
+}
+
+.ai-obf-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ai-obf-field-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.ai-obf-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+    background: var(--bg-main);
+    color: var(--text-dark);
+    resize: vertical;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ai-obf-textarea:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(0, 85, 255, 0.15);
+    background: var(--white);
+}
+
+.ai-obf-prompt-area {
+    font-family: 'Inter', -apple-system, sans-serif;
+}
+
+.ai-obf-sql-area,
+.ai-obf-code-output {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 12.5px;
+    tab-size: 2;
+}
+
+.ai-obf-actions-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
+.ai-obf-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.ai-obf-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid transparent;
+}
+
+.ai-obf-btn-primary {
+    background: var(--accent-blue);
+    color: var(--white);
+    border-color: var(--accent-blue);
+    box-shadow: 0 1px 3px rgba(0, 85, 255, 0.25);
+}
+
+.ai-obf-btn-primary:hover {
+    background: #0044CC;
+    border-color: #0044CC;
+}
+
+.ai-obf-btn-secondary {
+    background: var(--white);
+    color: var(--text-gray);
+    border-color: var(--border);
+}
+
+.ai-obf-btn-secondary:hover {
+    background: var(--bg-main);
+    color: var(--text-dark);
+}
+
+.ai-obf-cb-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-gray);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ai-obf-cb-label input {
+    cursor: pointer;
+    accent-color: var(--accent-blue);
+}
+
+.ai-obf-result-box {
+    margin-top: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ai-obf-result-box.hidden {
+    display: none;
+}
+
+.ai-obf-result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ai-obf-result-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #166534;
+}
+
+.ai-obf-copy-btn {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dark);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+}
+
+.ai-obf-copy-btn:hover {
+    background: var(--bg-main);
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+.ai-obf-mapping-container {
+    background: var(--bg-main);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 4px;
+}
+
+.ai-obf-mapping-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-gray);
+    user-select: none;
+}
+
+.ai-obf-mapping-header:hover {
+    color: var(--text-dark);
+}
+
+.ai-obf-mapping-arrow {
+    font-size: 11px;
+}
+
+.ai-obf-mapping-list {
+    display: none;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    max-height: 140px;
+    overflow-y: auto;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+}
+
+.ai-obf-mapping-list.is-expanded {
+    display: flex;
+}
+
+.ai-obf-mapping-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11.5px;
+    color: var(--text-dark);
+}
+
+.ai-obf-mapping-badge strong {
+    color: var(--accent-blue);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.ai-obf-mapping-badge code {
+    color: var(--text-dark);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.ai-obf-badge-string strong {
+    color: #D97706;
+}
+
+.ai-obf-restore-info-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ai-obf-session-status {
+    font-size: 11.5px;
+    padding: 2px 8px;
+    border-radius: 6px;
+}
+
+.ai-obf-session-status.is-ready {
+    background: rgba(34, 197, 94, 0.15);
+    color: #166534;
+}
+
+.ai-obf-session-status.is-empty {
+    background: #FEF3C7;
+    color: #92400E;
+}
+
+.ai-obf-footer {
+    background: var(--bg-main);
+    border-top: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-gray);
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ai-obf-security-note strong {
+    color: var(--text-dark);
+}
+
+.ai-obf-hint-note {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+}
+
+

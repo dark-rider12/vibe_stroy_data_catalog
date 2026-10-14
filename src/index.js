@@ -24,6 +24,7 @@ import {
   openStaleModal,
   closeStaleModal,
 } from "./lineage/tableLineageStale.js";
+import { initAiObfuscator, toggleAiObfuscatorModal } from "./ui/aiObfuscatorModal.js";
 
 // Экспортируем данные и функции в глобальную область видимости,
 // так как они вызываются из inline-обработчиков в HTML (onclick, ondblclick и т.д.)
@@ -54,6 +55,7 @@ window.toggleStaleMode = toggleStaleMode;
 window.isStaleModeActive = isStaleModeActive;
 window.openStaleModal = openStaleModal;
 window.closeStaleModal = closeStaleModal;
+window.toggleAiObfuscatorModal = toggleAiObfuscatorModal;
 
 // Инициализация приложения при загрузке DOM
 document.addEventListener("DOMContentLoaded", () => {
@@ -76,6 +78,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Инициализация скриптов Data Quality
   initDqScripts();
+
+  // Инициализация AI-обфускатора (хоткей Alt + O)
+  initAiObfuscator();
 
   // Вызываем обработчик навигации для текущего URL
   handleNavigation();
