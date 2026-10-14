@@ -1,5 +1,7 @@
 <h1> Статический тестовый справочник dwh (work in progress...)</h1>
 
+<div class="medallion-schema-placeholder"></div>
+
 <div class="schema-placeholder"></div>
 
 <div class="welcome-description"><h3>ℹ️ Как работает сортировка поиска (Приоритеты)</h3> <p>Выдача результатов строго ранжирована. В первую очередь вы увидите совпадения по целевым витринам (схема DM), затем по слою деталей (схема DDS) и в последнюю очередь ODS.</p>

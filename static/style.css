@@ -799,7 +799,78 @@ details[open]>summary::before {
 }
 
 /* Главная страница */
-/* Главная страница - Анимированная схема */
+/* Главная страница - Анимированная Medallion-схема (ODS -> DDS -> DM) */
+.medallion-schema-placeholder {
+    width: 100%;
+    height: 520px;
+    background: #0F172A;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    margin-bottom: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.medallion-schema-svg {
+    width: 100%;
+    height: 100%;
+}
+
+.med-zone,
+.med-schema-group {
+    pointer-events: none;
+}
+
+.med-path {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.22);
+    stroke-width: 2;
+    stroke-dasharray: 4, 4;
+    stroke-linecap: round;
+}
+
+.med-particle {
+    fill: #FFFFFF;
+    stroke: rgba(255, 255, 255, 0.6);
+    stroke-width: 1;
+    pointer-events: none;
+    animation: particle-glow 2s infinite ease-in-out;
+}
+
+.med-particle-ods {
+    fill: #FED7AA;
+    filter: drop-shadow(0 0 5px #F97316) drop-shadow(0 0 10px #F97316);
+}
+
+.med-particle-dds {
+    fill: #BBF7D0;
+    filter: drop-shadow(0 0 5px #22C55E) drop-shadow(0 0 10px #22C55E);
+}
+
+.med-particle-dm {
+    fill: #BFDBFE;
+    filter: drop-shadow(0 0 5px #3B82F6) drop-shadow(0 0 10px #3B82F6);
+}
+
+.med-node {
+    cursor: default;
+    transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.med-node rect {
+    transition: stroke-width 0.2s ease, filter 0.2s ease;
+}
+
+.med-node:hover rect {
+    stroke-width: 2;
+    filter: drop-shadow(0 0 8px currentColor);
+}
+
+/* Главная страница - Анимированная схема макро-потоков */
 .schema-placeholder {
     width: 100%;
     height: 400px;

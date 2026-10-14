@@ -144,6 +144,7 @@ docs/
 | 6 | Search Engine | поиск, search, searchbox, фильтр, индексирование | `src/` | `docs/LINEAGE_RULES.md` (места индексации) |
 | 7 | UI | кнопка, диалог, модал*, меню, кнопок, вёрстка, стиль, css, класс, компонент, ui, интерфейс, tooltip, попап | `src/`, `templates/`, `static/style.css` | `docs/UI_RULES.md` + `docs/DESIGN_SYSTEM.md` |
 | 8 | Smart Rebuild / Smart Execution Helper | пересчёт, пересборка, rebuild, new data, smart execution, выгрузка sql, очередь выполнения | `src/lineage/tableLineageRebuild.js` | `docs/SMART_EXECUTION_HELPER.md` |
+| 9 | SQL Obfuscator / Деобфускатор | обфускатор, деобфускатор, obfuscator, deobfuscate, alt+o, обезличивание, безопасный запрос, анонимизация | `src/utils/sqlObfuscator.js`, `src/ui/aiObfuscatorModal.js` | `docs/SQL_OBFUSCATOR.md` |
 
 ## Правила чтения
 

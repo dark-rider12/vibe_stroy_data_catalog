@@ -11,6 +11,7 @@ import { copyText, copySearchResult, copyTableData, exportTableToHTML, copyScrip
 import { handleLineageClick, handleLineageContextMenu, renderLineage } from "./lineage/tableLineage.js";
 import { openColumnLineage } from "./lineage/columnLineage.js";
 import { initHomeSchemaAnimation } from "./ui/homeAnimation.js";
+import { initMedallionSchemaAnimation } from "./ui/medallionAnimation.js";
 import {
   toggleNewDataSource,
   toggleCheckDescendant,
@@ -67,7 +68,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Инициализируем роутинг
   initNavigation();
   
-  // Запускаем анимацию на главном экране
+  // Запускаем анимации на главном экране
+  initMedallionSchemaAnimation();
   initHomeSchemaAnimation();
   
   // Нумерация строк в блоках скрипта (стиль DBeaver)
