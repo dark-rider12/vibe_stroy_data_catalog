@@ -76,7 +76,7 @@ export function initMedallionSchemaAnimation() {
 
     <!-- Стрелка для линий связи -->
     <marker id="med-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="rgba(255, 255, 255, 0.45)" />
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="rgba(255, 255, 255, 0.65)" />
     </marker>
   `;
   svg.appendChild(defs);
@@ -302,10 +302,9 @@ export function initMedallionSchemaAnimation() {
 
     // DDS -> DM
     { path: "M 666 145 L 734 145", layer: "dm" },
-    { path: "M 666 318 H 700 V 278 H 734", layer: "dm" },
-    { path: "M 666 145 H 692 V 360 H 938", layer: "dm" },
-    { path: "M 666 318 H 708 V 369 H 938", layer: "dm" },
-    { path: "M 450 437 H 692 V 378 H 938", layer: "dm" },
+    { path: "M 666 318 H 696 V 278 H 734", layer: "dm" },
+    { path: "M 666 318 H 696 V 362 H 938", layer: "dm" },
+    { path: "M 450 437 H 714 V 376 H 938", layer: "dm" },
 
     // DM Marts -> DM Business Summary
     { path: "M 880 145 H 902 V 204 H 938", layer: "dm" },
