@@ -60,12 +60,12 @@ _LAYER_BELOW = {
 
 # Системные команды создания/удаления расширений (не являются трансформациями данных)
 _IS_PURE_EXTENSION_REGEX = re.compile(
-    r'^\s*(?:--[^\n]*\s*)*(?:CREATE|DROP)\s+EXTENSION\b[^;]*(?:;|\s*)*$',
+    r'^\s*(?:--[^\r\n]*(?:\r?\n|\Z)\s*)*(?:CREATE|DROP)\s+EXTENSION\b[^;]*;?\s*$',
     re.IGNORECASE
 )
 
 _EXTENSION_STMT_REGEX = re.compile(
-    r'(?:^|;)\s*(?:--[^\n]*\s*)*(?:CREATE|DROP)\s+EXTENSION\b[^;]*(?:;|\s*)*',
+    r'(?:^|;)\s*(?:--[^\r\n]*(?:\r?\n|\Z)\s*)*(?:CREATE|DROP)\s+EXTENSION\b[^;]*;?',
     re.IGNORECASE
 )
 

@@ -84,15 +84,7 @@ export function openAiObfuscatorModal() {
       <!-- Шапка -->
       <div class="ai-obf-header">
         <div class="ai-obf-header-left">
-          <div class="ai-obf-shield-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
-          </div>
-          <div>
-            <h2 id="ai-obf-title" class="ai-obf-title">AI Prompt & SQL Обфускатор</h2>
-            <div class="ai-obf-subtitle">Локальное обезличивание для безопасных запросов в нейросеть</div>
-          </div>
+          <h2 id="ai-obf-title" class="ai-obf-title">SQL Обфускатор</h2>
         </div>
         <div class="ai-obf-header-right">
           <span class="ai-obf-hotkey-badge" title="Горячая клавиша для быстрого вызова">Alt + O</span>
@@ -161,7 +153,7 @@ export function openAiObfuscatorModal() {
           <div class="ai-obf-actions-bar">
             <div class="ai-obf-actions-left">
               <button class="ai-obf-btn ai-obf-btn-primary" id="ai-obf-process-btn">
-                ⚡ Обезличить
+                <span class="ai-obf-btn-icon">▷</span> Обезличить
               </button>
               <label class="ai-obf-cb-label">
                 <input type="checkbox" id="ai-obf-cb-strings" ${maskStringsEnabled ? 'checked' : ''}>
@@ -241,13 +233,6 @@ export function openAiObfuscatorModal() {
         </div>
       </div>
 
-      <!-- Футер -->
-      <div class="ai-obf-footer">
-        <span class="ai-obf-security-note">
-          🔒 <strong>100% локально:</strong> обработка выполняется в памяти браузера, данные не покидают ваш компьютер.
-        </span>
-        <span class="ai-obf-hint-note">Закрыть: крестик (✕)</span>
-      </div>
     </div>
   `;
 
