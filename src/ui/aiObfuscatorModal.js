@@ -12,6 +12,12 @@ let currentDialect = 'postgres';
 let currentTab = 'obfuscate';
 let maskStringsEnabled = true;
 
+// Сохранение введённого текста и результатов между открытиями модального окна
+let savedInputText = '';
+let savedRestoreInputText = '';
+let savedCombinedOutput = '';
+let savedRestoredOutput = '';
+
 /**
  * Инициализирует глобальный слушатель хоткея Alt + O
  */
@@ -21,7 +27,15 @@ export function initAiObfuscator() {
     const isO = e.code === 'KeyO' || e.key === 'o' || e.key === 'O' || e.key === 'о' || e.key === 'О';
     if (e.altKey && isO) {
       e.preventDefault();
-      toggleAiObfuscatorModal();
+      if (modalElement && document.body.contains(modalElement)) {
+        // Окно уже открыто — переводим фокус на поле ввода в активной вкладке
+        const activeInput = currentTab === 'deobfuscate' 
+          ? modalElement.querySelector('#ai-obf-restore-input')
+          : modalElement.querySelector('#ai-obf-input');
+        activeInput?.focus();
+      } else {
+        openAiObfuscatorModal();
+      }
     }
   });
 }
@@ -42,6 +56,12 @@ export function toggleAiObfuscatorModal() {
  */
 export function closeAiObfuscatorModal() {
   if (modalElement) {
+    // Сохраняем текущие значения перед удалением DOM-элемента
+    const inputEl = modalElement.querySelector('#ai-obf-input');
+    const restoreEl = modalElement.querySelector('#ai-obf-restore-input');
+    if (inputEl) savedInputText = inputEl.value;
+    if (restoreEl) savedRestoreInputText = restoreEl.value;
+
     modalElement.remove();
     modalElement = null;
   }
@@ -76,7 +96,7 @@ export function openAiObfuscatorModal() {
         </div>
         <div class="ai-obf-header-right">
           <span class="ai-obf-hotkey-badge" title="Горячая клавиша для быстрого вызова">Alt + O</span>
-          <button class="ai-obf-close-btn" id="ai-obf-close-btn" title="Закрыть (Esc)">&times;</button>
+          <button class="ai-obf-close-btn" id="ai-obf-close-btn" title="Закрыть">&times;</button>
         </div>
       </div>
 
@@ -107,28 +127,35 @@ export function openAiObfuscatorModal() {
       <div class="ai-obf-body">
         <!-- ВКЛАДКА 1: ОБЕЗЛИЧИВАНИЕ -->
         <div class="ai-obf-tab-pane ${currentTab === 'obfuscate' ? 'is-active' : ''}" id="ai-obf-pane-obfuscate">
-          <div class="ai-obf-form-group">
-            <label class="ai-obf-field-label" for="ai-obf-prompt-input">
-              Вопрос или промпт аналитика:
-            </label>
-            <textarea
-              id="ai-obf-prompt-input"
-              class="ai-obf-textarea ai-obf-prompt-area"
-              rows="3"
-              placeholder="Например: В таблице dds.fct_credit_deals задваиваются записи по полю deal_rk при джойне с dict_branch. Перепиши через оконную функцию..."
-            ></textarea>
+          <!-- Предупреждающий баннер безопасности данных -->
+          <div class="ai-obf-security-banner">
+            <div class="ai-obf-security-banner-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              <span>Строго запрещено передавать в нейросети без обезличивания:</span>
+            </div>
+            <div class="ai-obf-security-banner-items">
+              <span class="ai-obf-sec-pill">🚫 Персональные данные</span>
+              <span class="ai-obf-sec-pill">🚫 Банковскую и коммерческую тайну</span>
+              <span class="ai-obf-sec-pill">🚫 Настоящие названия таблиц DWH и полей</span>
+              <span class="ai-obf-sec-pill">🚫 DDL-скрипты</span>
+              <span class="ai-obf-sec-pill">🚫 Реальные строки данных и дампы</span>
+            </div>
           </div>
 
           <div class="ai-obf-form-group">
-            <label class="ai-obf-field-label" for="ai-obf-sql-input">
-              Исходный SQL-скрипт:
+            <label class="ai-obf-field-label" for="ai-obf-input">
+              Запрос к нейросети (вопрос аналитика и/или SQL-скрипт):
             </label>
             <textarea
-              id="ai-obf-sql-input"
-              class="ai-obf-textarea ai-obf-sql-area"
-              rows="5"
-              placeholder="SELECT d.deal_rk, b.branch_name&#10;FROM dds.fct_credit_deals d&#10;JOIN core.dict_branch b ON d.branch_rk = b.branch_rk&#10;WHERE d.deal_status = 'ACTIVE'"
-            ></textarea>
+              id="ai-obf-input"
+              class="ai-obf-textarea ai-obf-unified-area"
+              rows="10"
+              placeholder="Напишите вопрос и/или вставьте SQL-скрипт...&#10;&#10;Например:&#10;В таблице dds.fct_credit_deals задваиваются записи по полю deal_rk при джойне с dict_branch. Перепиши через оконную функцию:&#10;&#10;SELECT d.deal_rk, b.branch_name&#10;FROM dds.fct_credit_deals d&#10;JOIN core.dict_branch b ON d.branch_rk = b.branch_rk&#10;WHERE d.deal_status = 'ACTIVE'"
+            >${_escapeHtml(savedInputText)}</textarea>
           </div>
 
           <div class="ai-obf-actions-bar">
@@ -147,7 +174,7 @@ export function openAiObfuscatorModal() {
           </div>
 
           <!-- Блок результатов обфускации -->
-          <div class="ai-obf-result-box hidden" id="ai-obf-obfuscated-result-box">
+          <div class="ai-obf-result-box ${savedCombinedOutput ? '' : 'hidden'}" id="ai-obf-obfuscated-result-box">
             <div class="ai-obf-result-header">
               <span class="ai-obf-result-title">Готовый обезличенный запрос (для отправки в нейросеть):</span>
               <button class="ai-obf-copy-btn" id="ai-obf-copy-combined-btn">
@@ -158,7 +185,7 @@ export function openAiObfuscatorModal() {
                 <span>Скопировать всё для ИИ</span>
               </button>
             </div>
-            <textarea id="ai-obf-combined-output" class="ai-obf-textarea ai-obf-code-output" rows="6" readonly></textarea>
+            <textarea id="ai-obf-combined-output" class="ai-obf-textarea ai-obf-code-output" rows="10" readonly>${_escapeHtml(savedCombinedOutput)}</textarea>
 
             <!-- Список заменённых токенов -->
             <div class="ai-obf-mapping-container">
@@ -183,9 +210,9 @@ export function openAiObfuscatorModal() {
             <textarea
               id="ai-obf-restore-input"
               class="ai-obf-textarea ai-obf-sql-area"
-              rows="8"
+              rows="10"
               placeholder="Вставьте сюда ответ, полученный от нейросети (содержащий OBJ_001, OBJ_002 и т.д.)..."
-            ></textarea>
+            >${_escapeHtml(savedRestoreInputText)}</textarea>
           </div>
 
           <div class="ai-obf-actions-bar">
@@ -198,7 +225,7 @@ export function openAiObfuscatorModal() {
           </div>
 
           <!-- Блок результатов деобфускации -->
-          <div class="ai-obf-result-box hidden" id="ai-obf-restored-result-box">
+          <div class="ai-obf-result-box ${savedRestoredOutput ? '' : 'hidden'}" id="ai-obf-restored-result-box">
             <div class="ai-obf-result-header">
               <span class="ai-obf-result-title">Восстановленный результат (с реальными названиями):</span>
               <button class="ai-obf-copy-btn" id="ai-obf-copy-restored-btn">
@@ -209,7 +236,7 @@ export function openAiObfuscatorModal() {
                 <span>Скопировать результат</span>
               </button>
             </div>
-            <textarea id="ai-obf-restored-output" class="ai-obf-textarea ai-obf-code-output" rows="8" readonly></textarea>
+            <textarea id="ai-obf-restored-output" class="ai-obf-textarea ai-obf-code-output" rows="8" readonly>${_escapeHtml(savedRestoredOutput)}</textarea>
           </div>
         </div>
       </div>
@@ -219,7 +246,7 @@ export function openAiObfuscatorModal() {
         <span class="ai-obf-security-note">
           🔒 <strong>100% локально:</strong> обработка выполняется в памяти браузера, данные не покидают ваш компьютер.
         </span>
-        <span class="ai-obf-hint-note">Закрыть: Esc или Alt+O</span>
+        <span class="ai-obf-hint-note">Закрыть: крестик (✕)</span>
       </div>
     </div>
   `;
@@ -227,31 +254,26 @@ export function openAiObfuscatorModal() {
   document.body.appendChild(modalElement);
   _attachModalEvents(modalElement);
   _updateSessionStatus();
+  if (currentSessionMapping) {
+    _renderMappingList(currentSessionMapping);
+  }
 }
 
 /**
  * Подключение обработчиков событий модального окна
  */
 function _attachModalEvents(modal) {
-  // Закрытие по крестику
+  // Закрытие строго по крестику (клики по оверлею и Escape отключены для защиты от потери данных)
   const closeBtn = modal.querySelector('#ai-obf-close-btn');
   closeBtn?.addEventListener('click', closeAiObfuscatorModal);
 
-  // Закрытие по клику на оверлей вне модального окна
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) {
-      closeAiObfuscatorModal();
-    }
+  // Сохранение введённого текста при наборе
+  modal.querySelector('#ai-obf-input')?.addEventListener('input', (e) => {
+    savedInputText = e.target.value;
   });
-
-  // Закрытие по Escape
-  const onKeydown = (e) => {
-    if (e.key === 'Escape') {
-      closeAiObfuscatorModal();
-      window.removeEventListener('keydown', onKeydown);
-    }
-  };
-  window.addEventListener('keydown', onKeydown);
+  modal.querySelector('#ai-obf-restore-input')?.addEventListener('input', (e) => {
+    savedRestoreInputText = e.target.value;
+  });
 
   // Переключение вкладок
   const tabBtns = modal.querySelectorAll('.ai-obf-tab-btn');
@@ -289,38 +311,46 @@ function _attachModalEvents(modal) {
 
   // Кнопка Очистить (вкладка 1)
   modal.querySelector('#ai-obf-clear-btn-1')?.addEventListener('click', () => {
-    modal.querySelector('#ai-obf-prompt-input').value = '';
-    modal.querySelector('#ai-obf-sql-input').value = '';
+    const inputEl = modal.querySelector('#ai-obf-input');
+    const combinedOutput = modal.querySelector('#ai-obf-combined-output');
+    if (inputEl) inputEl.value = '';
+    if (combinedOutput) combinedOutput.value = '';
+    savedInputText = '';
+    savedCombinedOutput = '';
     modal.querySelector('#ai-obf-obfuscated-result-box')?.classList.add('hidden');
   });
 
   // Кнопка Очистить (вкладка 2)
   modal.querySelector('#ai-obf-clear-btn-2')?.addEventListener('click', () => {
-    modal.querySelector('#ai-obf-restore-input').value = '';
+    const restoreInput = modal.querySelector('#ai-obf-restore-input');
+    const restoredOutput = modal.querySelector('#ai-obf-restored-output');
+    if (restoreInput) restoreInput.value = '';
+    if (restoredOutput) restoredOutput.value = '';
+    savedRestoreInputText = '';
+    savedRestoredOutput = '';
     modal.querySelector('#ai-obf-restored-result-box')?.classList.add('hidden');
   });
 
   // Кнопка «⚡ Обезличить»
   modal.querySelector('#ai-obf-process-btn')?.addEventListener('click', () => {
-    const promptInput = modal.querySelector('#ai-obf-prompt-input')?.value || '';
-    const sqlInput = modal.querySelector('#ai-obf-sql-input')?.value || '';
+    const inputText = modal.querySelector('#ai-obf-input')?.value || '';
 
-    if (!promptInput.trim() && !sqlInput.trim()) {
-      alert('Пожалуйста, введите текст промпта или SQL-скрипт для обезличивания.');
+    if (!inputText.trim()) {
+      alert('Пожалуйста, введите текст запроса или SQL-скрипт для обезличивания.');
       return;
     }
 
     const catalogData = window.catalogData || null;
 
     const result = obfuscatePromptAndSql({
-      prompt: promptInput,
-      sql: sqlInput,
+      text: inputText,
       dialect: currentDialect,
       catalogData,
       maskStrings: maskStringsEnabled
     });
 
     currentSessionMapping = result.mapping;
+    savedCombinedOutput = result.combinedText;
 
     // Отображаем результат
     const resultBox = modal.querySelector('#ai-obf-obfuscated-result-box');
@@ -368,6 +398,7 @@ function _attachModalEvents(modal) {
     }
 
     const restoredText = deobfuscateText(restoreInput, currentSessionMapping);
+    savedRestoredOutput = restoredText;
 
     const resultBox = modal.querySelector('#ai-obf-restored-result-box');
     const restoredOutput = modal.querySelector('#ai-obf-restored-output');

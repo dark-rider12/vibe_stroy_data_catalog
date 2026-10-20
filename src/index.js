@@ -26,11 +26,13 @@ import {
   closeStaleModal,
 } from "./lineage/tableLineageStale.js";
 import { initAiObfuscator, toggleAiObfuscatorModal } from "./ui/aiObfuscatorModal.js";
+import { switchScriptMode } from "./utils/scriptTransform.js";
 
 // Экспортируем данные и функции в глобальную область видимости,
 // так как они вызываются из inline-обработчиков в HTML (onclick, ondblclick и т.д.)
 // window.catalogData is already set by the Python backend in index.html template
 window.switchTab = switchTab;
+window.switchScriptMode = switchScriptMode;
 window.toggleSidebar = toggleSidebar;
 window.initTableColumnResize = initTableColumnResize;
 window.navigateTo = navigateTo;

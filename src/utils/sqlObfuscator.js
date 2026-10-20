@@ -18,8 +18,9 @@ export const COMMON_SQL_KEYWORDS = new Set([
   'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP', 'LOCALTIME', 'LOCALTIMESTAMP',
   'CURRENT_USER', 'SESSION_USER', 'SYSTEM_USER', 'CURRENT_ROLE', 'CURRENT_SCHEMA', 'CURRENT_CATALOG',
   'DAY', 'DAYS', 'MONTH', 'MONTHS', 'YEAR', 'YEARS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES',
-  'SECOND', 'SECONDS', 'WEEK', 'WEEKS', 'MILLISECOND', 'MICROSECOND', 'QUARTER', 'DECADE',
-  'CENTURY', 'MILLENNIUM', 'EPOCH', 'DOW', 'DOY', 'ISODOW', 'ISOYEAR',
+  'SECOND', 'SECONDS', 'WEEK', 'WEEKS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', 'MICROSECONDS',
+  'QUARTER', 'QUARTERS', 'DECADE', 'DECADES', 'CENTURY', 'CENTURIES', 'MILLENNIUM', 'MILLENNIA',
+  'MILLENNIUMS', 'EPOCH', 'DOW', 'DOY', 'ISODOW', 'ISOYEAR',
   'TRUE', 'FALSE', 'CAST', 'COALESCE', 'NULLIF', 'COUNT', 'SUM', 'AVG', 'MIN',
   'MAX', 'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'NTILE', 'LAG', 'LEAD',
   'FIRST_VALUE', 'LAST_VALUE', 'BIGINT', 'INT', 'INTEGER', 'SMALLINT', 'TINYINT',
@@ -28,6 +29,24 @@ export const COMMON_SQL_KEYWORDS = new Set([
   'USING', 'NATURAL', 'ANY', 'SOME', 'UPPER', 'LOWER', 'SUBSTRING', 'TRIM',
   'COALESCE', 'CONCAT', 'ROUND', 'TRUNC', 'ABS', 'FLOOR', 'CEIL', 'CEILING',
   'EXTRACT', 'REPLACE', 'POSITION'
+]);
+
+// Стандартные уровни (единицы) усечения даты/времени в PostgreSQL (функция date_trunc, date_part)
+export const DATE_TRUNC_UNITS = new Set([
+  'microsecond', 'microseconds',
+  'millisecond', 'milliseconds', 'ms',
+  'second', 'seconds', 'sec', 'secs', 's',
+  'minute', 'minutes', 'min', 'mins', 'm',
+  'hour', 'hours', 'hr', 'hrs', 'h',
+  'day', 'days', 'd',
+  'week', 'weeks', 'w',
+  'month', 'months', 'mon', 'mons',
+  'quarter', 'quarters', 'qtr', 'qtrs',
+  'year', 'years', 'yr', 'yrs', 'y',
+  'decade', 'decades',
+  'century', 'centuries', 'cent', 'cents',
+  'millennium', 'millennia', 'millenniums', 'mil', 'mils',
+  'epoch'
 ]);
 
 // Специфические ключевые слова и функции PostgreSQL
@@ -95,6 +114,11 @@ export function isDateTimeString(str) {
 
   // 5. Выражения интервалов (например: '1 day', '7 days', '1 month', '12 hours', '1 год')
   if (/^\d+\s*(day|days|month|months|year|years|hour|hours|minute|minutes|second|seconds|week|weeks|день|дня|дней|месяц|месяца|месяцев|год|года|лет|час|часа|часов|минута|минуты|минут)$/i.test(s)) {
+    return true;
+  }
+
+  // 6. Уровни усечения date_trunc() / date_part() в PostgreSQL ('year', 'month', 'day', 'hour' и др.)
+  if (DATE_TRUNC_UNITS.has(s.toLowerCase())) {
     return true;
   }
 
@@ -233,6 +257,7 @@ function escapeRegex(str) {
 export function obfuscatePromptAndSql({
   prompt = '',
   sql = '',
+  text = '',
   dialect = 'postgres',
   catalogData = null,
   maskStrings = true
@@ -258,6 +283,106 @@ export function obfuscatePromptAndSql({
     return token;
   }
 
+  // --- ЕДИНЫЙ РЕЖИМ (если передан text вместо раздельных prompt и sql) ---
+  const unifiedInput = text || (!sql && prompt ? prompt : '');
+  if (unifiedInput && !sql) {
+    let processedText = unifiedInput;
+
+    // 1. Извлекаем строковые литералы
+    if (maskStrings && processedText) {
+      const stringLiteralRegex = dialect === 'mssql'
+        ? /(?:N)?'([^']*(?:''[^']*)*)'/g
+        : /(?:E)?'([^']*(?:''[^']*)*)'|\$\$([\s\S]*?)\$\$/g;
+
+      processedText = processedText.replace(stringLiteralRegex, (match, singleContent, dollarContent) => {
+        const content = singleContent !== undefined ? singleContent : dollarContent;
+        if (!content || content.trim().length === 0) return match;
+
+        // Даты, дата/время и интервалы НЕ искажать
+        if (isDateTimeString(content.trim())) {
+          const dtPlaceholder = `___PRESERVED_DT_${preservedDateTokens.length}___`;
+          preservedDateTokens.push({ placeholder: dtPlaceholder, original: match });
+          return dtPlaceholder;
+        }
+
+        const strKey = `__STR__:${match.trim().toLowerCase()}`;
+        if (!originalToToken[strKey]) {
+          const token = `STR_${String(strCounter++).padStart(3, '0')}`;
+          originalToToken[strKey] = token;
+          tokenToOriginal[token] = match;
+          items.push({ token, original: match, type: 'string' });
+        }
+        return `'${originalToToken[strKey]}'`;
+      });
+    }
+
+    // 2. Кандидаты на замену
+    const candidateTerms = new Set();
+
+    // 2a. Из catalogData
+    if (catalogData) {
+      const dwhTerms = extractDwhTerms(catalogData);
+      for (const term of dwhTerms) {
+        if (term && term.length >= 2 && !reserved.has(term.toUpperCase())) {
+          candidateTerms.add(term);
+        }
+      }
+    }
+
+    // 2b. Из SQL-парсера по тексту (все таблицы, алиасы, CTE, #temp, @var)
+    const sqlTerms = extractSqlTerms(unifiedInput, dialect);
+    for (const term of sqlTerms) {
+      if (term && term.length >= 2 && !reserved.has(term.toUpperCase())) {
+        candidateTerms.add(term);
+      }
+    }
+
+    // 2c. Латинские слова с подчеркиваниями из промпта
+    const promptWords = unifiedInput.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) || [];
+    for (const word of promptWords) {
+      if (word.length >= 2 && !reserved.has(word.toUpperCase())) {
+        if (candidateTerms.has(word) || word.includes('_')) {
+          candidateTerms.add(word);
+        }
+      }
+    }
+
+    // 3. Сортировка по длине (по убыванию)
+    const sortedTerms = Array.from(candidateTerms).sort((a, b) => b.length - a.length);
+    for (const term of sortedTerms) {
+      registerToken(term, 'identifier');
+    }
+
+    // 4. Замена по границам слова
+    for (const term of sortedTerms) {
+      const key = term.toLowerCase();
+      const token = originalToToken[key];
+      if (!token) continue;
+
+      const regex = new RegExp(`\\b${escapeRegex(term)}\\b`, 'gi');
+      processedText = processedText.replace(regex, token);
+    }
+
+    // 5. Возврат дат
+    if (preservedDateTokens && preservedDateTokens.length > 0) {
+      for (const { placeholder, original } of preservedDateTokens) {
+        processedText = processedText.replace(placeholder, original);
+      }
+    }
+
+    return {
+      obfuscatedPrompt: processedText,
+      obfuscatedSql: '',
+      combinedText: processedText.trim(),
+      mapping: {
+        tokenToOriginal,
+        originalToToken,
+        items
+      }
+    };
+  }
+
+  // --- РАЗДЕЛЬНЫЙ РЕЖИМ (обратная совместимость) ---
   // 1. Извлекаем строковые литералы из SQL (если включено)
   let processedSql = sql || '';
   if (maskStrings && processedSql) {

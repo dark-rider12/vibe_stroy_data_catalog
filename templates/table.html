@@ -188,18 +188,25 @@
             </div>
             {% endif %}
             <div class="table-actions">
-                <button class="copy-btn" onclick="copyScriptContent('{{ unique_id }}', this)">
+                <button class="copy-btn" id="copy-btn-{{ unique_id }}" onclick="copyScriptContent('{{ unique_id }}', this)">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                     </svg>
                     Копировать скрипт
                 </button>
+                {% if table_info.type != 'v' and table_info.type != 'm' and table_info.sql_script %}
+                <div class="script-mode-switch" id="script-mode-switch-{{ unique_id }}" data-unique-id="{{ unique_id }}" data-db="{{ db_name }}" data-schema="{{ schema_name }}" data-table="{{ table_name }}">
+                    <button type="button" class="script-mode-btn active" data-mode="dev" onclick="switchScriptMode('{{ unique_id }}', 'dev', this)">Dev (CTAS)</button>
+                    <button type="button" class="script-mode-btn" data-mode="test" onclick="switchScriptMode('{{ unique_id }}', 'test', this)">Test (DDL + INSERT)</button>
+                </div>
+                {% endif %}
             </div>
             <pre class="ddl-block table-script-block" id="script-{{ unique_id }}"><code>{% if table_info.sql_script %}{{ table_info.sql_script | e }}{% endif %}{% if table_info.sql_script_extra %}{% if table_info.sql_script %}
 
 
 {% endif %}{{ table_info.sql_script_extra | e }}{% endif %}</code></pre>
+            <div class="test-script-container" id="test-script-container-{{ unique_id }}" style="display: none;"></div>
         {% else %}
             <div class="empty-pane">Скрипт для этой таблицы не найден в public.sql_inventory. Дополнительные метаданные (ограничения, комментарии, индексы) также отсутствуют.</div>
         {% endif %}

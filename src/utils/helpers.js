@@ -129,8 +129,11 @@ export function highlightMatch(text, query) {
 }
 
 export function copyScriptContent(uniqueId, btnElement) {
-  const pre = document.getElementById(`script-${uniqueId}`);
-  if (!pre) return;
+  let pre = document.getElementById(`script-${uniqueId}`);
+  if (!pre || pre.tagName.toLowerCase() !== "pre") {
+    pre = document.getElementById(uniqueId);
+  }
+  if (!pre || pre.tagName.toLowerCase() !== "pre") return;
 
   // Собираем только текст кода, без номеров строк
   const lineCodes = pre.querySelectorAll(".line-code");
@@ -276,8 +279,8 @@ export function initDqScripts() {
  * Добавляет нумерацию строк в блоки скрипта (стиль DBeaver).
  * Номера строк некликабельны и не выделяются мышкой.
  */
-export function initScriptLineNumbers() {
-  const blocks = document.querySelectorAll(".table-script-block code");
+export function initScriptLineNumbers(root = document) {
+  const blocks = root.querySelectorAll(".table-script-block code");
   blocks.forEach((code) => {
     // Не обрабатывать повторно
     if (code.dataset.lineNumbersApplied) return;
