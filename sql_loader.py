@@ -58,6 +58,17 @@ _LAYER_BELOW = {
     "dds": "ods",
 }
 
+# Системные команды создания/удаления расширений (не являются трансформациями данных)
+_IS_PURE_EXTENSION_REGEX = re.compile(
+    r'^\s*(?:--[^\n]*\s*)*(?:CREATE|DROP)\s+EXTENSION\b[^;]*(?:;|\s*)*$',
+    re.IGNORECASE
+)
+
+_EXTENSION_STMT_REGEX = re.compile(
+    r'(?:^|;)\s*(?:--[^\n]*\s*)*(?:CREATE|DROP)\s+EXTENSION\b[^;]*(?:;|\s*)*',
+    re.IGNORECASE
+)
+
 
 def _normalize_foreign_tables(sql: str, db_name: str = "") -> str:
     """
@@ -152,7 +163,15 @@ def load_sql_transformations(config: dict) -> list[dict]:
                 target_table  = row[1]
                 raw_query     = row[2] or ""
                 updated_at    = row[3]
+                # Пропускаем чисто системные команды (CREATE/DROP EXTENSION), не создающие таблицы DWH
+                if _IS_PURE_EXTENSION_REGEX.match(raw_query):
+                    continue
                 query         = _normalize_foreign_tables(raw_query, db_name)
+                # Если в комплексном скрипте есть преамбула EXTENSION, отсекаем её из query для lineage
+                if "EXTENSION" in query.upper():
+                    query = _EXTENSION_STMT_REGEX.sub(';', query).strip(' ;\n\r\t')
+                    if not query:
+                        continue
                 results.append({
                     "source":        "public.sql_inventory",
                     "db_name":       db_name,

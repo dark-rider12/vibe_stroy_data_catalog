@@ -87,9 +87,9 @@ export function initMedallionSchemaAnimation() {
       id: "zone-ods",
       name: "ods",
       color: "#F97316",
-      x: 35,
+      x: 40,
       y: 38,
-      width: 225,
+      width: 215,
       height: 454
     },
     {
@@ -281,11 +281,11 @@ export function initMedallionSchemaAnimation() {
   // 3. Линии связей и маршруты движения данных
   const connections = [
     // Входные потоки в ODS слева
-    { path: "M 5 112 L 60 112", layer: "ods" },
-    { path: "M 5 177 L 60 177", layer: "ods" },
-    { path: "M 5 297 H 32 V 277 H 60", layer: "ods" },
-    { path: "M 32 297 V 357 H 60", layer: "ods" },
-    { path: "M 32 297 V 437 H 60", layer: "ods" },
+    { path: "M 4 112 L 60 112", layer: "ods" },
+    { path: "M 4 177 L 60 177", layer: "ods" },
+    { path: "M 4 297 H 16 V 277 H 60", layer: "ods" },
+    { path: "M 16 297 V 357 H 60", layer: "ods" },
+    { path: "M 16 297 V 437 H 60", layer: "ods" },
 
     // ODS -> DDS Cleaned
     { path: "M 235 112 L 306 112", layer: "ods" },
