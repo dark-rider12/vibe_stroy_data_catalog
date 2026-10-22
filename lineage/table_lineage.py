@@ -52,7 +52,13 @@ def _get_table_id(table_exp, default_db: str = "") -> str:
         schema = real_schema
 
     if not db:
-        db = default_db
+        # Если schema — это имя известной БД (ods, dds, dm), а catalog пуст (2-составное имя вида dm.table):
+        # В Postgres нет каталогов, sqlglot помещает первое имя в schema (db).
+        if schema in ("ods", "dds", "dm"):
+            db = schema
+            schema = ""
+        else:
+            db = default_db
 
     if not schema:
         # Только имя таблицы — не можем определить схему надёжно
@@ -119,12 +125,22 @@ def compute_table_lineage(catalog: dict, sql_transformations: list[dict], existi
                     source_tables.add(src_id)
                 else:
                     # SMART MATCHING: Если схема не указана, пробуем найти таблицу
-                    # в любой доступной схеме той же базы данных
+                    # в любой доступной схеме той же базы данных.
+                    # Поддерживает как неквалифицированные таблицы (table_name),
+                    # так и 2-составные с именем БД (dm.table_name).
+                    target_db = default_db
                     if not table.db:
+                        target_db = default_db
+                    elif table.db.lower() in ("ods", "dds", "dm") and not table.catalog:
+                        target_db = table.db.lower()
+                    else:
+                        target_db = None
+
+                    if target_db:
                         tbl_name_lower = table.name.lower()
                         for candidate_id in lookup.keys():
                             parts = candidate_id.split('.')
-                            if len(parts) == 3 and parts[0] == default_db and parts[2] == tbl_name_lower:
+                            if len(parts) == 3 and parts[0] == target_db and parts[2] == tbl_name_lower:
                                 source_tables.add(candidate_id)
                                 break
             

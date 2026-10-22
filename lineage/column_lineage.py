@@ -246,14 +246,41 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
     return result
 
 
-def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dict = None, lookup: dict = None, default_db: str = "") -> str:
+_DEFAULT_SCHEMAS = {"core", "calc", "public", "ods", "dds", "dm", "sandbox_1", "sandbox_2", "sandbox_3"}
+
+
+def _build_schema_lookahead(catalog: dict = None) -> str:
+    r"""
+    Строит регулярку отрицательного просмотра вперёд для известных схем DWH:
+    (?!(?:core|calc|public|ods|dds|dm)\.)
+    Используется для предотвращения коллизий при замене алиасов (напр. 'dm', 'dds', 'ods'),
+    чтобы 'dm.core.table.col' не превращалось в 'dm.table_ref.core.table.col'.
+    """
+    schemas = set(_DEFAULT_SCHEMAS)
+    if catalog:
+        for db_name, db_schemas in catalog.items():
+            if db_name == "CorpusName" or not isinstance(db_schemas, dict):
+                continue
+            for s in db_schemas.keys():
+                schemas.add(s.lower())
+    pattern = '|'.join(re.escape(s) for s in sorted(schemas, key=len, reverse=True))
+    return rf'(?!(?:{pattern})\.)'
+
+
+def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dict = None, lookup: dict = None, default_db: str = "", visited: set = None, schema_lookahead: str = "") -> str:
     """
     Разворачивает ссылки на CTE в выражении.
     Обрабатывает как прямые имена CTE ("account_stats.col"),
     так и алиасы CTE ("ast.col" если JOIN account_stats ast).
     """
-    if not cte_map:
+    if not cte_map or not expression_sql:
         return expression_sql
+
+    if visited is None:
+        visited = set()
+
+    if not schema_lookahead:
+        schema_lookahead = _build_schema_lookahead()
 
     # Строим расширенный маппинг: и имена CTE, и их алиасы → cte_info
     effective_map = dict(cte_map)  # cte_name -> cte_info
@@ -262,7 +289,10 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
             if cte_name in cte_map:
                 effective_map[alias] = cte_map[cte_name]
 
+    expr_lower = expression_sql.lower()
     for ref_name, cte_info in effective_map.items():
+        if ref_name in visited or ref_name not in expr_lower:
+            continue
         cte_select = cte_info['select']
         cte_alias_map = cte_info['alias_map']
 
@@ -272,7 +302,7 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
             re.IGNORECASE
         )
 
-        def replace_cte_ref(m, _body=cte_select, _cte_info=cte_info):
+        def replace_cte_ref(m, _body=cte_select, _cte_info=cte_info, _current_ref=ref_name):
             col_ref = m.group(1).lower()
             # Берём актуальный alias_map из cte_info (он мог быть обновлён рекурсивным проходом)
             _amap = _cte_info['alias_map']
@@ -298,20 +328,17 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                 # Если в ветке нет своих таблиц — fallback на актуальный _amap
                 if not branch_amap:
                     branch_amap = _amap
-                # Убираем из branch_amap ключи, которые являются именами CTE,
-                # или значения которых являются псевдо-ID для CTE
+                # Убираем из branch_amap ключи, значения которых являются псевдо-ID для CTE
                 # (последняя часть пути совпадает с именем CTE в cte_map)
-                # (они не реальные таблицы и будут раскрыты через _resolve_cte_refs ниже)
-                # Одновременно строим маппинг алиасов CTE внутри этой ветки:
-                # {алиас → имя_CTE} — нужен для рекурсивного раскрытия через _resolve_cte_refs
+                # (они не реальные таблицы и будут раскрыты через _resolve_cte_refs ниже).
+                # ВАЖНО: проверяем tid_last in cte_map, а НЕ cte_key in cte_map!
+                # Если у реальной физической таблицы алиас совпал с именем CTE (напр. FROM real_table account_info),
+                # она не должна удаляться из branch_amap и считаться CTE.
                 branch_cte_aliases = {}
                 for cte_key in list(branch_amap.keys()):
                     tid_val = branch_amap[cte_key]
                     tid_last = tid_val.split('.')[-1].lower()
-                    if cte_key in cte_map:
-                        branch_cte_aliases[cte_key] = cte_key
-                        del branch_amap[cte_key]
-                    elif tid_last in cte_map:
+                    if tid_last in cte_map:
                         branch_cte_aliases[cte_key] = tid_last
                         del branch_amap[cte_key]
                 # Если после фильтрации branch_amap пустой — ветка содержит только CTE-ссылки.
@@ -327,7 +354,10 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                     inner_sql = _node_to_expr(inner)
                     inner_sql = _strip_sql_comments(inner_sql)
                     inner_sql = inner_sql.replace('"DWH".', '').replace('"', '')
+                    inner_sql_lower = inner_sql.lower()
                     for ak in sorted(branch_amap.keys(), key=len, reverse=True):
+                        if ak not in inner_sql_lower:
+                            continue
                         full_tid = branch_amap[ak]
                         if lookup and full_tid in lookup:
                             db_orig, schema_orig, name_orig = lookup[full_tid]
@@ -336,12 +366,14 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                             tbl_parts = full_tid.split('.')
                             ref = '.'.join(tbl_parts[-3:]) if len(tbl_parts) >= 3 else '.'.join(tbl_parts)
                         inner_sql = re.sub(
-                            rf'(?<![\w.])({re.escape(ak)})\.',
+                            rf'(?<![\w.])({re.escape(ak)})\.{schema_lookahead}',
                             f'{ref}.',
                             inner_sql,
                             flags=re.IGNORECASE
                         )
-                    inner_sql = _resolve_cte_refs(inner_sql, cte_map, branch_cte_aliases if branch_cte_aliases else None, lookup, default_db)
+                        inner_sql_lower = inner_sql.lower()
+                    next_visited = set(visited) | {_current_ref}
+                    inner_sql = _resolve_cte_refs(inner_sql, cte_map, branch_cte_aliases if branch_cte_aliases else None, lookup, default_db, next_visited, schema_lookahead)
                     branch_sqls.append((pending_op, inner_sql))
                     break
                 pending_op = ''
@@ -412,6 +444,7 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
 
     from sqlglot.schema import MappingSchema
     sqlglot_schema = MappingSchema(schema_dict)
+    schema_lookahead = _build_schema_lookahead(catalog)
 
     for item in sql_transformations:
         sql = item["query"]
@@ -644,15 +677,9 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
             for i, select_item in enumerate(first_select.selects):
                 alias = select_item.alias_or_name
                 
-                # [DEBUG LOG]
-                with open("scratch/lineage_debug.log", "a", encoding="utf-8") as f:
-                    f.write(f"Processing select item {i}: alias='{alias}', target_table='{target_table}'\n")
-
                 # Если алиаса нет (напр. в INSERT), берем имя колонки по позиции из метаданных
                 if not alias and i < len(table_columns):
                     alias = table_columns[i]
-                    with open("scratch/lineage_debug.log", "a", encoding="utf-8") as f:
-                        f.write(f"  Fallback alias to: '{alias}'\n")
                 
                 if not alias: continue
 
@@ -682,8 +709,11 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
 
                     # Локальный alias_map ветки уже посчитан заранее (branch_infos)
                     effective_alias_map = bi['alias_map']
+                    branch_sql_lower = branch_sql.lower()
 
                     for alias_key in sorted(effective_alias_map.keys(), key=len, reverse=True):
+                        if alias_key not in branch_sql_lower:
+                            continue
                         full_tid = effective_alias_map[alias_key]
                         if lookup and full_tid in lookup:
                             db_orig, schema_orig, name_orig = lookup[full_tid]
@@ -692,15 +722,16 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
                             table_parts = full_tid.split('.')
                             table_ref = '.'.join(table_parts[-3:]) if len(table_parts) >= 3 else '.'.join(table_parts)
                         branch_sql = re.sub(
-                            rf'(?<![\w.])({re.escape(alias_key)})\.',
+                            rf'(?<![\w.])({re.escape(alias_key)})\.{schema_lookahead}',
                             f'{table_ref}.',
                             branch_sql,
                             flags=re.IGNORECASE
                         )
+                        branch_sql_lower = branch_sql.lower()
 
-                    branch_sql = _resolve_cte_refs(branch_sql, cte_map, cte_alias_to_name, lookup, default_db)
+                    branch_sql = _resolve_cte_refs(branch_sql, cte_map, cte_alias_to_name, lookup, default_db, None, schema_lookahead)
                     # Раскрываем алиасы inline-view подзапросов (аналогично CTE)
-                    branch_sql = _resolve_cte_refs(branch_sql, subquery_map, {}, lookup, default_db)
+                    branch_sql = _resolve_cte_refs(branch_sql, subquery_map, {}, lookup, default_db, None, schema_lookahead)
                     branch_expressions.append((pending_op, branch_sql))
                     pending_op = ''
 
@@ -804,10 +835,20 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
                                             found = True
                                         continue
                                     else:
-                                        for tid in lookup.keys():
-                                            if tid.split('.')[-1] == table_candidate:
-                                                src_table = tid
-                                                break
+                                        cand_db = parts[-3].lower() if len(parts) >= 3 and parts[-3].lower() in ("ods", "dds", "dm") else None
+                                        matched = False
+                                        if cand_db:
+                                            for tid in lookup.keys():
+                                                tid_parts = tid.split('.')
+                                                if len(tid_parts) == 3 and tid_parts[0] == cand_db and tid_parts[2] == table_candidate:
+                                                    src_table = tid
+                                                    matched = True
+                                                    break
+                                        if not matched:
+                                            for tid in lookup.keys():
+                                                if tid.split('.')[-1] == table_candidate:
+                                                    src_table = tid
+                                                    break
                                 else:
                                     col_name = clean_name
                                     if hasattr(n, 'source') and isinstance(n.source, exp.Table):
@@ -866,11 +907,17 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
 
                 if source_columns:
                     for sc in source_columns:
-                        db_s, schema_s, name_s = lookup[sc["table"]]
-                        entry = {"source_table": f"{db_s}.{schema_s}.{name_s}", "source_column": sc["column"]}
+                        tbl_key = sc["table"]
+                        if tbl_key in lookup:
+                            db_s, schema_s, name_s = lookup[tbl_key]
+                            src_tbl_str = f"{db_s}.{schema_s}.{name_s}"
+                        else:
+                            src_tbl_str = tbl_key
+                        entry = {"source_table": src_tbl_str, "source_column": sc["column"]}
                         if entry not in col_lineage[target_col]["sources"]:
                             col_lineage[target_col]["sources"].append(entry)
-        except Exception:
+        except Exception as e:
+            print(f"   [Column Lineage Warning] Ошибка расчета для {target_table}: {e}")
             continue
     return catalog
 
@@ -991,7 +1038,7 @@ def compute_column_sources(catalog: dict, source_system_map: dict = None) -> dic
                                 # ВАРИАНТ 1: Анализируем само выражение колонки
                                 # Пытаемся найти таблицы, упомянутые в коде этой колонки
                                 t_info = lookup.get(state[0].lower())
-                                col_lineage_entry = t_info.get("column_lineage", {}).get(c_name.lower())
+                                col_lineage_entry = t_info.get("column_lineage", {}).get(c_name.lower()) if t_info else None
                                 expr = col_lineage_entry.get("expression", "") if col_lineage_entry else ""
                                 
                                 found_via_expr = False

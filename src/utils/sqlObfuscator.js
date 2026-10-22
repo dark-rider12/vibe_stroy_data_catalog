@@ -28,7 +28,7 @@ export const COMMON_SQL_KEYWORDS = new Set([
   'TIMESTAMP', 'TEXT', 'VARCHAR', 'CHAR', 'BYTEA', 'BLOB', 'CLOB', 'INTERVAL',
   'USING', 'NATURAL', 'ANY', 'SOME', 'UPPER', 'LOWER', 'SUBSTRING', 'TRIM',
   'COALESCE', 'CONCAT', 'ROUND', 'TRUNC', 'ABS', 'FLOOR', 'CEIL', 'CEILING',
-  'EXTRACT', 'REPLACE', 'POSITION'
+  'EXTRACT', 'REPLACE', 'POSITION', 'SQL'
 ]);
 
 // Стандартные уровни (единицы) усечения даты/времени в PostgreSQL (функция date_trunc, date_part)
@@ -62,7 +62,7 @@ export const POSTGRES_KEYWORDS = new Set([
   'JUSTIFY_HOURS', 'JUSTIFY_INTERVAL', 'BOOL_AND', 'BOOL_OR', 'VACUUM',
   'ANALYZE', 'EXPLAIN', 'PERFORM', 'RAISE', 'NOTICE', 'EXCEPTION', 'FOUND',
   'ROW_COUNT', 'SERIAL', 'BIGSERIAL', 'UUID', 'GEN_RANDOM_UUID', 'TIMESTAMPTZ',
-  'TIMETZ'
+  'TIMETZ', 'MATERIALIZED', 'LATERAL', 'POSTGRE', 'POSTGRES', 'POSTGRESQL', 'PGSQL'
 ]);
 
 // Специфические ключевые слова, функции и хинты MS SQL (T-SQL)
@@ -79,7 +79,8 @@ export const MSSQL_KEYWORDS = new Set([
   'TRANSACTION', 'TRAN', 'COMMIT', 'ROLLBACK', 'TRY', 'CATCH', 'PRINT',
   'OBJECT_ID', 'SCOPE_IDENTITY', 'IDENT_CURRENT', 'QUOTENAME', 'HASHBYTES',
   'CHECKSUM', 'ROWCOUNT', 'FETCH', 'NEXT', 'ROWS', 'ONLY', 'CLUSTERED',
-  'NONCLUSTERED', 'IDENTITY', 'SCHEMA_NAME', 'DB_NAME', 'OBJECT_NAME', 'COL_NAME'
+  'NONCLUSTERED', 'IDENTITY', 'SCHEMA_NAME', 'DB_NAME', 'OBJECT_NAME', 'COL_NAME',
+  'MSSQL', 'TSQL'
 ]);
 
 /**
@@ -236,6 +237,140 @@ function escapeRegex(str) {
 }
 
 /**
+ * Удаляет однострочные (--) и многострочные (/* ... * /) комментарии из SQL,
+ * не затрагивая строковые константы и экранированные идентификаторы.
+ * Поддерживает PostgreSQL (включая вложенные комментарии /* /*...* / * / и dollar-quoting $$...$$)
+ * и MS SQL (включая скобки [schema].[table]).
+ * @param {string} sql
+ * @param {'postgres'|'mssql'} dialect
+ * @returns {string}
+ */
+export function stripSqlComments(sql, dialect = 'postgres') {
+  if (!sql || typeof sql !== 'string') return '';
+  const result = [];
+  let i = 0;
+  const len = sql.length;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBrackets = false; // для MS SQL [col]
+  let inDollarQuote = false;
+  let dollarTag = '';
+
+  while (i < len) {
+    const ch = sql[i];
+    const next = i + 1 < len ? sql[i + 1] : '';
+
+    // PostgreSQL dollar-quoting ($$...$$ или $tag$...$tag$)
+    if (dialect === 'postgres' && !inSingleQuote && !inDoubleQuote) {
+      if (!inDollarQuote && ch === '$') {
+        const remainder = sql.slice(i);
+        const match = remainder.match(/^\$([a-zA-Z0-9_]*)\$/);
+        if (match) {
+          inDollarQuote = true;
+          dollarTag = match[0];
+          result.push(dollarTag);
+          i += dollarTag.length;
+          continue;
+        }
+      } else if (inDollarQuote && ch === '$' && sql.startsWith(dollarTag, i)) {
+        inDollarQuote = false;
+        result.push(dollarTag);
+        i += dollarTag.length;
+        continue;
+      }
+    }
+
+    if (inDollarQuote) {
+      result.push(ch);
+      i++;
+      continue;
+    }
+
+    // MS SQL скобки [identifier]
+    if (dialect === 'mssql' && !inSingleQuote && !inDoubleQuote) {
+      if (!inBrackets && ch === '[') {
+        inBrackets = true;
+        result.push(ch);
+        i++;
+        continue;
+      } else if (inBrackets && ch === ']') {
+        inBrackets = false;
+        result.push(ch);
+        i++;
+        continue;
+      }
+    }
+
+    if (inBrackets) {
+      result.push(ch);
+      i++;
+      continue;
+    }
+
+    // Одинарные кавычки ('...')
+    if (ch === "'" && !inDoubleQuote) {
+      if (inSingleQuote && next === "'") {
+        result.push("''");
+        i += 2;
+        continue;
+      }
+      inSingleQuote = !inSingleQuote;
+      result.push(ch);
+      i++;
+      continue;
+    }
+
+    // Двойные кавычки ("...")
+    if (ch === '"' && !inSingleQuote) {
+      if (inDoubleQuote && next === '"') {
+        result.push('""');
+        i += 2;
+        continue;
+      }
+      inDoubleQuote = !inDoubleQuote;
+      result.push(ch);
+      i++;
+      continue;
+    }
+
+    if (!inSingleQuote && !inDoubleQuote) {
+      // Однострочный комментарий: --
+      if (ch === '-' && next === '-') {
+        i += 2;
+        while (i < len && sql[i] !== '\n' && sql[i] !== '\r') {
+          i++;
+        }
+        continue;
+      }
+      // Многострочный блочный комментарий: /* ... */ (с поддержкой вложенности в PostgreSQL)
+      if (ch === '/' && next === '*') {
+        i += 2;
+        let depth = 1;
+        while (i < len && depth > 0) {
+          if (sql[i] === '/' && sql[i + 1] === '*') {
+            depth++;
+            i += 2;
+          } else if (sql[i] === '*' && sql[i + 1] === '/') {
+            depth--;
+            i += 2;
+          } else {
+            i++;
+          }
+        }
+        result.push(' ');
+        continue;
+      }
+    }
+
+    result.push(ch);
+    i++;
+  }
+
+  // Очистка пустых хвостов строк и избыточных тройных переводов строк
+  return result.join('').replace(/[ \t]+$/gm, '').replace(/\n\s*\n\s*\n/g, '\n\n');
+}
+
+/**
  * Обезличивает промпт и SQL запрос.
  * @param {Object} params
  * @param {string} params.prompt
@@ -243,6 +378,7 @@ function escapeRegex(str) {
  * @param {'postgres'|'mssql'} [params.dialect='postgres']
  * @param {Object} [params.catalogData=null]
  * @param {boolean} [params.maskStrings=true] - маскировать ли строковые константы SQL
+ * @param {boolean} [params.stripComments=true] - удалять ли однострочные и многострочные комментарии
  * @returns {{
  *   obfuscatedPrompt: string,
  *   obfuscatedSql: string,
@@ -260,7 +396,8 @@ export function obfuscatePromptAndSql({
   text = '',
   dialect = 'postgres',
   catalogData = null,
-  maskStrings = true
+  maskStrings = true,
+  stripComments = true
 }) {
   const reserved = dialect === 'mssql' ? MSSQL_KEYWORDS : POSTGRES_KEYWORDS;
   const tokenToOriginal = {};
@@ -284,8 +421,11 @@ export function obfuscatePromptAndSql({
   }
 
   // --- ЕДИНЫЙ РЕЖИМ (если передан text вместо раздельных prompt и sql) ---
-  const unifiedInput = text || (!sql && prompt ? prompt : '');
+  let unifiedInput = text || (!sql && prompt ? prompt : '');
   if (unifiedInput && !sql) {
+    if (stripComments) {
+      unifiedInput = stripSqlComments(unifiedInput, dialect);
+    }
     let processedText = unifiedInput;
 
     // 1. Извлекаем строковые литералы
@@ -385,6 +525,9 @@ export function obfuscatePromptAndSql({
   // --- РАЗДЕЛЬНЫЙ РЕЖИМ (обратная совместимость) ---
   // 1. Извлекаем строковые литералы из SQL (если включено)
   let processedSql = sql || '';
+  if (stripComments && processedSql) {
+    processedSql = stripSqlComments(processedSql, dialect);
+  }
   if (maskStrings && processedSql) {
     // В MS SQL: N'...' или '...'
     // В PostgreSQL: '...' или $$...$$ или E'...'

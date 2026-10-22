@@ -11,6 +11,7 @@ let currentSessionMapping = null;
 let currentDialect = 'postgres';
 let currentTab = 'obfuscate';
 let maskStringsEnabled = true;
+let stripCommentsEnabled = true;
 
 // Сохранение введённого текста и результатов между открытиями модального окна
 let savedInputText = '';
@@ -156,6 +157,10 @@ export function openAiObfuscatorModal() {
                 <span class="ai-obf-btn-icon">▷</span> Обезличить
               </button>
               <label class="ai-obf-cb-label">
+                <input type="checkbox" id="ai-obf-cb-comments" ${stripCommentsEnabled ? 'checked' : ''}>
+                <span>Удалять комментарии (-- и /* */)</span>
+              </label>
+              <label class="ai-obf-cb-label">
                 <input type="checkbox" id="ai-obf-cb-strings" ${maskStringsEnabled ? 'checked' : ''}>
                 <span>Обезличивать строковые константы ('текст' &rarr; STR_001)</span>
               </label>
@@ -288,6 +293,12 @@ function _attachModalEvents(modal) {
     });
   });
 
+  // Чекбокс удаления комментариев
+  const cbComments = modal.querySelector('#ai-obf-cb-comments');
+  cbComments?.addEventListener('change', (e) => {
+    stripCommentsEnabled = e.target.checked;
+  });
+
   // Чекбокс маскирования строк
   const cbStrings = modal.querySelector('#ai-obf-cb-strings');
   cbStrings?.addEventListener('change', (e) => {
@@ -331,7 +342,8 @@ function _attachModalEvents(modal) {
       text: inputText,
       dialect: currentDialect,
       catalogData,
-      maskStrings: maskStringsEnabled
+      maskStrings: maskStringsEnabled,
+      stripComments: stripCommentsEnabled
     });
 
     currentSessionMapping = result.mapping;
