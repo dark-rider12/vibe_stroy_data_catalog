@@ -73,9 +73,10 @@ flowchart LR
 
 ```text
 ├── scripts_for_test_dwh/     # 🛠 Скрипты инициализации тестовой песочницы DWH (ODS -> DDS -> DM)
+│   ├── 00_init_sql_inventory.sql # Инфраструктура sql_inventory и Event Trigger в dds и dm
 │   ├── 01_init_ods.sql       # Создание таблиц ODS + наполнение данными
-│   ├── 02_init_dds.sql       # Настройка FDW, создание детального слоя DDS + sql_inventory
-│   ├── 03_init_dm.sql        # Настройка FDW, создание витрин DM + sql_inventory
+│   ├── 02_init_dds.sql       # Настройка FDW, создание детального слоя DDS
+│   ├── 03_init_dm.sql        # Настройка FDW, создание витрин DM
 │   └── README.md             # Инструкция по развёртыванию тестовой БД
 ├── lineage/                  # 🐍 Python-модули парсинга SQL и построения графов
 │   ├── table_lineage.py      # Извлечение связей таблиц (sqlglot AST)
@@ -123,6 +124,11 @@ npm install
 # В PostgreSQL создайте 3 базы данных:
 # CREATE DATABASE ods; CREATE DATABASE dds; CREATE DATABASE dm;
 
+# Предварительная настройка: sql_inventory и Event Trigger в базах dds и dm (до создания таблиц):
+psql -U postgres -d dds -f scripts_for_test_dwh/00_init_sql_inventory.sql
+psql -U postgres -d dm  -f scripts_for_test_dwh/00_init_sql_inventory.sql
+
+# Создание и наполнение слоёв DWH:
 psql -U postgres -d ods -f scripts_for_test_dwh/01_init_ods.sql
 psql -U postgres -d dds -f scripts_for_test_dwh/02_init_dds.sql
 psql -U postgres -d dm  -f scripts_for_test_dwh/03_init_dm.sql
