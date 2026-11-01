@@ -10,6 +10,7 @@ DEPENDENCIES: config, metadata_loader, sql_loader, table_lineage, column_lineage
 
 import sys
 import subprocess
+import time
 from config import load_config
 from metadata_loader import extract_metadata, load_source_system_map, load_source_system_details
 from sql_loader import load_sql_transformations
@@ -408,6 +409,9 @@ def compute_dq_metadata(catalog: dict):
 
 def main():
     try:
+        total_start = time.perf_counter()
+
+        t0 = time.perf_counter()
         print("0. Сборка frontend-модулей (esbuild)...")
         # Автоматический вызов npx для сборки JS (скачает esbuild при необходимости)
         subprocess.run(
@@ -415,17 +419,23 @@ def main():
             shell=True,
             check=True
         )
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("1. Загрузка конфигурации...")
         config = load_config()
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("2. Загрузка метаданных DWH...")
         catalog = extract_metadata(config)
 
         if not catalog:
             print("Нет данных для генерации.")
             return
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("2а. Загрузка справочника систем-источников...")
         source_system_map = load_source_system_map(config)
         source_system_details = load_source_system_details(config)
@@ -439,14 +449,20 @@ def main():
                     existing_tables_ids.add(f"{db_name}.{schema_name}.{table_name}".lower())
 
         print(f"   - Всего в метаданных найдено {len(existing_tables_ids)} существующих таблиц.")
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("3. Загрузка SQL трансформаций (Подготовка lineage)...")
         sql_data = load_sql_transformations(config)
         catalog = attach_sql_scripts(catalog, sql_data)
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("4. Расчет Table Lineage...")
         catalog = compute_table_lineage(catalog, sql_data, existing_tables_ids, source_system_map)
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("5. Расчет Column Lineage...")
         catalog = compute_column_lineage(catalog, sql_data, existing_tables_ids)
         catalog = compute_column_sources(catalog, source_system_map)
@@ -486,12 +502,22 @@ def main():
 
         if ghost_count > 0:
             print(f"   - [Cleanup] Всего удалено {ghost_count} ссылок на несуществующие таблицы.")
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("5б. Расчет метаданных Data Quality...")
         compute_dq_metadata(catalog)
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
 
+        t0 = time.perf_counter()
         print("6. Сборка статического сайта...")
         generate_html(catalog, config["output_file"], source_system_map=source_system_details)
+        print(f"   ✓ Выполнено за {time.perf_counter() - t0:.2f} сек.\n")
+
+        total_elapsed = time.perf_counter() - total_start
+        print("=" * 54)
+        print(f"✓ Каталог успешно сгенерирован за {total_elapsed:.2f} сек.")
+        print("=" * 54)
 
     except Exception as e:
         import traceback

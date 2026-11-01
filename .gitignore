@@ -23,6 +23,7 @@ yarn-error.log*
 
 # Каталог сборки
 dist/
+static/main.js
 
 # IDE и редакторы
 .vscode/
@@ -41,3 +42,6 @@ tests/.run_test.cjs
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Скрипт экспорта для рабочей почты
+export_for_email.py

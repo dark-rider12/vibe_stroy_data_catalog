@@ -16,6 +16,7 @@ import {
   toggleNewDataSource,
   toggleCheckDescendant,
   selectAllEligibleDescendants,
+  selectPreviousLayerParents,
   resetRebuildFlow,
   openRebuildSqlModal,
 } from "./lineage/tableLineageRebuild.js";
@@ -52,6 +53,7 @@ window.openColumnLineage = openColumnLineage;
 window.toggleNewDataSource = toggleNewDataSource;
 window.toggleCheckDescendant = toggleCheckDescendant;
 window.selectAllEligibleDescendants = selectAllEligibleDescendants;
+window.selectPreviousLayerParents = selectPreviousLayerParents;
 window.resetRebuildFlow = resetRebuildFlow;
 window.openRebuildSqlModal = openRebuildSqlModal;
 window.toggleStaleMode = toggleStaleMode;

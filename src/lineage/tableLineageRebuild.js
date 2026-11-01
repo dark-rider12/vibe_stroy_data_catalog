@@ -248,6 +248,104 @@ export function selectAllEligibleDescendants(uniqueId) {
 }
 
 /**
+ * Находит и возвращает родителей из предшествующего слоя для заданных узлов
+ */
+export function getPreviousLayerParentsForNodes(canvas, nodeIds) {
+  const { parentsMap } = getGraphAdjacency(canvas);
+  const resultParentsBySource = new Map();
+
+  nodeIds.forEach((nodeId) => {
+    const nodeEl = canvas.querySelector(`.ln-node[data-node-id="${nodeId}"]`);
+    if (!nodeEl) return;
+    const currentLayer = nodeEl.closest(".lineage-layer");
+    if (!currentLayer) return;
+
+    const prevLayer = currentLayer.previousElementSibling;
+    const allDirectParents = parentsMap.get(nodeId) || [];
+    if (allDirectParents.length === 0) return;
+
+    if (prevLayer) {
+      const prevLayerNodes = new Set();
+      prevLayer.querySelectorAll(".ln-node:not(.ln-virtual)").forEach((el) => {
+        if (el.dataset.nodeId) prevLayerNodes.add(el.dataset.nodeId);
+      });
+
+      const directInPrevLayer = allDirectParents.filter((p) => prevLayerNodes.has(p));
+      if (directInPrevLayer.length > 0) {
+        resultParentsBySource.set(nodeId, directInPrevLayer);
+        return;
+      }
+    }
+
+    resultParentsBySource.set(nodeId, allDirectParents);
+  });
+
+  return resultParentsBySource;
+}
+
+/**
+ * Проверяет, можно ли сделать шаг назад (есть ли родители слева у текущих источников)
+ */
+export function canStepBackSources(canvas, state) {
+  if (!canvas || !state || state.activeSources.size === 0) return false;
+  const parentsBySource = getPreviousLayerParentsForNodes(canvas, Array.from(state.activeSources));
+  for (const parents of parentsBySource.values()) {
+    if (parents && parents.length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Выделяет всех родителей текущих активных источников из предшествующего слоя
+ */
+export function selectPreviousLayerParents(uniqueId) {
+  const canvas = document.getElementById(`canvas-${uniqueId}`);
+  if (!canvas) return;
+
+  const state = getState(uniqueId);
+  if (state.activeSources.size === 0) return;
+
+  const parentsBySource = getPreviousLayerParentsForNodes(canvas, Array.from(state.activeSources));
+  if (parentsBySource.size === 0) return;
+
+  let addedAny = false;
+
+  parentsBySource.forEach((parents, sourceId) => {
+    if (!parents || parents.length === 0) return;
+
+    parents.forEach((p) => {
+      const isOds = p.toLowerCase().startsWith("ods.");
+      state.activeSources.add(p);
+      if (!isOds && hasSqlScript(p)) {
+        state.checkedNodes.add(p);
+      }
+      addedAny = true;
+    });
+
+    state.activeSources.delete(sourceId);
+    if (hasSqlScript(sourceId)) {
+      state.checkedNodes.add(sourceId);
+    }
+  });
+
+  if (!addedAny) return;
+
+  // Валидируем выбранные узлы после расширения источников
+  const impactedData = computeImpactedSubgraph(canvas, state.activeSources);
+  const invalid = [];
+  state.checkedNodes.forEach((n) => {
+    if (!state.activeSources.has(n)) {
+      if (!impactedData.impacted.has(n) || !canCheckNode(n, state, impactedData)) {
+        invalid.push(n);
+      }
+    }
+  });
+  invalid.forEach((n) => cascadeUncheck(n, state, impactedData));
+
+  updateRebuildDOM(canvas, uniqueId);
+}
+
+/**
  * Полный сброс режима пересборки
  */
 export function resetRebuildFlow(uniqueId) {
@@ -595,6 +693,10 @@ function renderRebuildDock(pane, uniqueId, sourcesCount, checkedCount, blockedCo
     ? `<div class="ln-dock-stat ln-dock-stat--blocked" title="Узлы без скрипта в sql_inventory (пересборка заблокирована)">⚠️ Без скрипта: <b>${blockedCount}</b></div>`
     : "";
 
+  const canvas = pane.querySelector(".lineage-canvas") || document.getElementById(`canvas-${uniqueId}`);
+  const state = getState(uniqueId);
+  const canStepBack = canStepBackSources(canvas, state);
+
   dock.innerHTML = `
     <div class="ln-dock-stats">
       <div class="ln-dock-stat ln-dock-stat--sources">Источников: <b>${sourcesCount}</b></div>
@@ -604,6 +706,7 @@ function renderRebuildDock(pane, uniqueId, sourcesCount, checkedCount, blockedCo
     </div>
     <div class="ln-dock-actions">
       <button class="ln-dock-btn ln-dock-btn--select-all" id="btn-select-all-${uniqueId}" title="Последовательно выбрать все доступные валидные таблицы по цепочке">Выбрать всех потомков</button>
+      <button class="ln-dock-btn ln-dock-btn--select-parents" id="btn-select-parents-${uniqueId}" title="Выбрать родителей из предыдущего слоя для текущих таблиц пересборки" ${canStepBack ? "" : "disabled"}>Выбрать родителей</button>
       <button class="ln-dock-btn ln-dock-btn--reset" id="btn-reset-${uniqueId}" title="Сбросить выбор пересборки">Сбросить</button>
       <button class="ln-dock-btn ln-dock-btn--primary" id="btn-export-sql-${uniqueId}" ${checkedCount === 0 ? "disabled" : ""}>
         Сформировать SQL пересчёта (${checkedCount})
@@ -615,6 +718,14 @@ function renderRebuildDock(pane, uniqueId, sourcesCount, checkedCount, blockedCo
     e.stopPropagation();
     selectAllEligibleDescendants(uniqueId);
   };
+
+  const btnParents = dock.querySelector(`#btn-select-parents-${uniqueId}`);
+  if (btnParents) {
+    btnParents.onclick = (e) => {
+      e.stopPropagation();
+      selectPreviousLayerParents(uniqueId);
+    };
+  }
 
   dock.querySelector(`#btn-reset-${uniqueId}`).onclick = (e) => {
     e.stopPropagation();

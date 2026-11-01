@@ -4356,8 +4356,8 @@ path.ln-edge-line {
 
 /* Приглушение несвязанных элементов в режиме пересборки */
 .rebuild-flow-active .ln-node.ln-node-dimmed {
-    opacity: 0.18 !important;
-    filter: grayscale(40%) !important;
+    opacity: 0.38 !important;
+    filter: grayscale(20%) !important;
     pointer-events: none !important;
     box-shadow: none !important;
     transition: opacity 0.25s ease, filter 0.25s ease;
@@ -4372,7 +4372,7 @@ path.ln-edge-line {
 
 .rebuild-flow-active .ln-node.ln-node-dimmed.ln-node-ods:hover,
 .rebuild-flow-active .ln-node.ln-node-dimmed:has(.ln-new-data-btn):hover {
-    opacity: 0.65 !important;
+    opacity: 0.75 !important;
     filter: grayscale(10%) !important;
 }
 
@@ -4392,7 +4392,7 @@ path.ln-edge-line {
 }
 
 .rebuild-flow-active path.ln-edge-line.ln-edge-dimmed {
-    opacity: 0.08 !important;
+    opacity: 0.20 !important;
     stroke: #CBD5E1 !important;
     transition: opacity 0.25s ease;
 }
@@ -4491,6 +4491,22 @@ path.ln-edge-line {
 
 .ln-dock-btn--select-all:hover {
     background: #BAE6FD;
+}
+
+.ln-dock-btn--select-parents {
+    color: #4338CA;
+    background: #EEF2FF;
+}
+
+.ln-dock-btn--select-parents:hover:not(:disabled) {
+    background: #E0E7FF;
+}
+
+.ln-dock-btn--select-parents:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #F1F5F9;
+    color: #94A3B8;
 }
 
 .ln-dock-btn--reset {
