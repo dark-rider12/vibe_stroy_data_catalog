@@ -351,6 +351,89 @@ body {
     box-shadow: 0 4px 12px rgba(0, 85, 255, 0.3);
 }
 
+/* Закрепленный поиск по объектам боковой панели (DBeaver style) */
+.sidebar-search-sticky {
+    position: sticky;
+    top: -20px;
+    z-index: 20;
+    background-color: var(--primary-bg);
+    margin: 12px -20px 8px -20px;
+    padding: 8px 20px 10px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-search-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.sidebar-search-icon {
+    position: absolute;
+    left: 10px;
+    width: 14px;
+    height: 14px;
+    stroke: rgba(255, 255, 255, 0.45);
+    pointer-events: none;
+    flex-shrink: 0;
+}
+
+.sidebar-search-box {
+    width: 100%;
+    height: 34px;
+    padding: 6px 28px 6px 32px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    color: #F8FAFC;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    box-sizing: border-box;
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sidebar-search-box::placeholder {
+    color: rgba(255, 255, 255, 0.38);
+}
+
+.sidebar-search-box:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.24);
+}
+
+.sidebar-search-box:focus {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--accent-blue, #0055FF);
+    box-shadow: 0 0 0 3px rgba(0, 85, 255, 0.25);
+}
+
+.sidebar-search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.15s ease, background 0.15s ease;
+    padding: 0;
+}
+
+.sidebar-search-clear:hover {
+    color: #FFFFFF;
+    background: rgba(255, 255, 255, 0.12);
+}
+
 /* Иконки в дереве */
 .icon {
     display: inline-block;
@@ -410,6 +493,15 @@ body {
     color: var(--white);
     text-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
 }
+/* Вывод названий объектов боковой панели через CSS-псевдоэлементы для изоляции от браузерного Ctrl+F */
+.tree-title {
+    display: inline;
+}
+
+.tree-title::after {
+    content: attr(data-title);
+}
+
 
 details>summary {
     cursor: pointer;

@@ -78,6 +78,7 @@ generate_catalog.py
 * `src/` — исходный JavaScript (ES modules)
   * `lineage/columnLineagePropagation.js` — проброс колонок в Column Lineage
   * `lineage/tableLineageRebuild.js` — пересборка DWH (Smart Execution Helper)
+  * `ui/sidebarSearch.js` — поиск и фильтрация объектов в боковой панели (DBeaver style)
 * `templates/` — Jinja2 шаблоны
 * `static/style.css` — CSS
 * `static/main.js` — скомпилированный JS-бандл (esbuild)
@@ -141,7 +142,7 @@ docs/
 | 3 | Column Propagation (проброс колонок) | проброс, пропагация, propagation, column propagation, протаскивание колонок | `src/lineage/columnLineagePropagation.js` | `docs/COLUMN_PROPAGATION.md` + `docs/LINEAGE_RULES.md` |
 | 4 | Table Propagation (протягивание таблицы) | протягивание, table propagation, протаскивание таблицы, propagation | `src/lineage/tablePropagation.js` | `docs/COLUMN_PROPAGATION.md` |
 | 5 | SQL Lineage Parsing | парсинг, parsing, SQL lineage, parse, sql_loader | `sql_loader.py`, `lineage/*.py` | `docs/SQL_RULES.md` |
-| 6 | Search Engine | поиск, search, searchbox, фильтр, индексирование | `src/` | `docs/LINEAGE_RULES.md` (места индексации) |
+| 6 | Search Engine | поиск, search, searchbox, фильтр, индексирование, sidebarSearch, боковая панель, поиск объектов | `src/ui/search.js`, `src/ui/sidebarSearch.js` | `docs/LINEAGE_RULES.md` (места индексации) + `docs/UI_RULES.md` (поиск в боковой панели) |
 | 7 | UI | кнопка, диалог, модал*, меню, кнопок, вёрстка, стиль, css, класс, компонент, ui, интерфейс, tooltip, попап | `src/`, `templates/`, `static/style.css` | `docs/UI_RULES.md` + `docs/DESIGN_SYSTEM.md` |
 | 8 | Smart Rebuild / Smart Execution Helper | пересчёт, пересборка, rebuild, new data, smart execution, выгрузка sql, очередь выполнения | `src/lineage/tableLineageRebuild.js` | `docs/SMART_EXECUTION_HELPER.md` |
 | 9 | SQL Obfuscator / Деобфускатор | обфускатор, деобфускатор, obfuscator, deobfuscate, alt+o, обезличивание, безопасный запрос, анонимизация | `src/utils/sqlObfuscator.js`, `src/ui/aiObfuscatorModal.js` | `docs/SQL_OBFUSCATOR.md` |

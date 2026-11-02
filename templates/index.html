@@ -1,15 +1,24 @@
 {% extends "base.html" %}
-
 {% block content %}
 <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
         <img src="static/logo.png" class="sidebar-logo" alt="Логотип">
         <h2>Справочник DWH</h2>
     </div>
-    <div class="sidebar-content"> <a href="#home" class="home-btn">🏠 Главная страница</a>
+    <div class="sidebar-content"> <a href="#home" class="home-btn">🏠&nbsp;<span class="tree-title" data-title="Главная страница"></span></a>
+        <div class="sidebar-search-sticky">
+            <div class="sidebar-search-wrapper">
+                <svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="sidebar-search-input" class="sidebar-search-box" placeholder="Поиск по объектам..." autocomplete="off" spellcheck="false">
+                <button type="button" id="sidebar-search-clear" class="sidebar-search-clear" title="Очистить поиск" style="display: none;">✕</button>
+            </div>
+        </div>
         <ul id="tree"> {% for db_name, schemas in catalog.items() %} <li>
                 <details open>
-                    <summary><i class="icon ic-db"></i> {{ db_name }}</summary>
+                    <summary><i class="icon ic-db"></i> <span class="tree-title" data-title="{{ db_name }}"></span></summary>
                     {% set core_schemas = ['core', 'calc'] %}
                     {% set system_schemas = [] %}
                     {% for schema_name in schemas.keys() %}
@@ -23,17 +32,17 @@
                             <details>
                                 <summary>
                                     {% if schema_name | lower == 'core' %}
-                                    <div class="sidebar-schema-node ln-core-{{ db_name | lower }}">{{ schema_name }}</div>
+                                    <div class="sidebar-schema-node ln-core-{{ db_name | lower }}"><span class="tree-title" data-title="{{ schema_name }}"></span></div>
                                     {% elif schema_name | lower == 'calc' %}
-                                    <div class="sidebar-schema-node ln-core-{{ db_name | lower }}">{{ schema_name }}</div>
+                                    <div class="sidebar-schema-node ln-core-{{ db_name | lower }}"><span class="tree-title" data-title="{{ schema_name }}"></span></div>
                                     {% else %}
-                                    <div class="sidebar-schema-node ln-{{ schema_name | lower }}">{{ schema_name }}</div>
+                                    <div class="sidebar-schema-node ln-{{ schema_name | lower }}"><span class="tree-title" data-title="{{ schema_name }}"></span></div>
                                     {% endif %}
                                 </summary>
                                 <ul> {% for table_name, t_info in tables.items() %} <li> <a
-                                            href="#{{ db_name }}-{{ schema_name }}-{{ table_name }}"> {% if t_info.type
+                                            href="#{{ db_name }}-{{ schema_name }}-{{ table_name }}" data-name="{{ table_name }}"> {% if t_info.type
                                             == 'v' or t_info.type == 'm' %}<i class="icon ic-view"></i>{% else %}<i
-                                                class="icon ic-tbl"></i>{% endif %} {{ table_name }} </a> </li> {%
+                                                class="icon ic-tbl"></i>{% endif %} <span class="tree-title" data-title="{{ table_name }}"></span> </a> </li> {%
                                     endfor %} </ul>
                             </details>
                         </li> {% endif %}
@@ -41,7 +50,7 @@
                         {% if system_schemas %}
                         <li class="sidebar-systems-group">
                             <details>
-                                <summary class="sidebar-group-label">Systems</summary>
+                                <summary class="sidebar-group-label"><span class="tree-title" data-title="Systems"></span></summary>
                                 <ul>
                                 {% for schema_name, tables in schemas.items() %}
                                     {% if schema_name | lower not in hidden_schemas and schema_name | lower not in core_schemas %}
@@ -49,12 +58,9 @@
                                     <li>
                                     <details>
                                         <summary>
-                                            <div class="sidebar-schema-node ln-system-{{ sys_idx }}">{{ schema_name }}</div>
+                                            <div class="sidebar-schema-node ln-system-{{ sys_idx }}"><span class="tree-title" data-title="{{ schema_name }}"></span></div>
                                         </summary>
-                                        <ul> {% for table_name, t_info in tables.items() %} <li> <a
-                                                    href="#{{ db_name }}-{{ schema_name }}-{{ table_name }}"> {% if t_info.type
-                                                    == 'v' or t_info.type == 'm' %}<i class="icon ic-view"></i>{% else %}<i
-                                                        class="icon ic-tbl"></i>{% endif %} {{ table_name }} </a> </li> {%
+                                        <ul> {% for table_name, t_info in tables.items() %} <li> <a href="#{{ db_name }}-{{ schema_name }}-{{ table_name }}" data-name="{{ table_name }}"> {% if t_info.type == 'v' or t_info.type == 'm' %}<i class="icon ic-view"></i>{% else %}<i class="icon ic-tbl"></i>{% endif %} <span class="tree-title" data-title="{{ table_name }}"></span> </a> </li> {%
                                             endfor %} </ul>
                                     </details>
                                     </li> {% endif %}
@@ -98,16 +104,13 @@
         </div>
         <span class="build-timestamp">🔄 Обновлено:<br>{{ build_time }}</span>
     </div>
-
     <div class="main-body">
         <div id="search-count" style="display: none;"></div>
         <div id="search-results"></div>
-
         <div id="welcome-screen">
             <!-- Markdown конвертированный в HTML -->
             {{ welcome_html | safe }}
         </div>
-
         {% for db_name, schemas in catalog.items() %}
         {% for schema_name, tables in schemas.items() %}
         {% for table_name, table_info in tables.items() %}
@@ -117,5 +120,4 @@
         {% endfor %}
         {% endfor %}
     </div>
-
 </div> {% endblock %}

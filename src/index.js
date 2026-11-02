@@ -5,6 +5,7 @@ ROLE: Главный входной файл (Entry Point). Инициализи
 
 import { initLayout, switchTab, toggleSidebar, initTableColumnResize } from "./ui/layout.js";
 import { initSearch } from "./ui/search.js";
+import { initSidebarSearch } from "./ui/sidebarSearch.js";
 import { initColumnFilter } from "./ui/columnFilter.js";
 import { initNavigation, navigateTo, handleNavigation } from "./routing/navigation.js";
 import { copyText, copySearchResult, copyTableData, exportTableToHTML, copyScriptContent, copyDqScript, generateDqScript, generateFillDqScript, fillDmComments, initScriptLineNumbers, initScriptWordHighlight, initDqScripts } from "./utils/helpers.js";
@@ -68,6 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initLayout();
   initSearch();
   initColumnFilter();
+  initSidebarSearch();
   
   // Инициализируем роутинг
   initNavigation();
