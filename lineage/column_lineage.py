@@ -447,6 +447,11 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
     schema_lookahead = _build_schema_lookahead(catalog)
 
     for item in sql_transformations:
+        # Пропускаем ручные справочники — для них не строим входящий column lineage
+        target_name = (item.get("target_table") or "").lower()
+        if target_name.startswith("ref_manual_") or target_name == "ref_source_system":
+            continue
+
         sql = item["query"]
         # default_db: база, из которой пришёл скрипт (для резолвинга таблиц без явного db)
         default_db = item.get("db_name", "dwh").lower()
@@ -460,6 +465,11 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
                 target_table = _get_table_id(parsed.this, default_db)
 
             if not target_table or target_table not in lookup:
+                continue
+
+            # Страховочная проверка по распарсенному target_table
+            t_short = target_table.split(".")[-1].lower()
+            if t_short.startswith("ref_manual_") or t_short == "ref_source_system":
                 continue
 
             # --- Qualify columns to resolve table names ---
@@ -1032,7 +1042,7 @@ def compute_column_sources(catalog: dict, source_system_map: dict = None) -> dic
                             if is_ods_source:
                                 prefix = t_name.split("_")[0] if "_" in t_name else t_name
                                 sources.add(resolve_source_name(prefix))
-                            elif t_schema == 'core' and (t_name.startswith('ref_manual_') or t_name == 'ref_source_system'):
+                            elif (t_name.startswith('ref_manual_') or t_name == 'ref_source_system'):
                                 sources.add('РУЧ')
                             else:
                                 # ВАРИАНТ 1: Анализируем само выражение колонки
