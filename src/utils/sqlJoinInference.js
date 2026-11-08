@@ -47,6 +47,18 @@ export function normalizeTableName(fullName) {
 }
 
 /**
+ * Проверяет, является ли таблица или витрина временным черновиком (tmp_*).
+ * @param {string|object} item 
+ * @returns {boolean}
+ */
+export function isTemporaryTable(item) {
+  if (!item) return false;
+  const name = typeof item === "string" ? item : (item.table || item.name || "");
+  const clean = normalizeTableName(name);
+  return clean.startsWith("tmp_");
+}
+
+/**
  * Получает канонический ключ таблицы (db.schema.table).
  * @param {string|object} item 
  * @returns {string}
@@ -163,6 +175,7 @@ export class SqlScriptMiningStrategy {
         if (!tables || typeof tables !== "object") continue;
 
         for (const tableName of Object.keys(tables)) {
+          if (isTemporaryTable(tableName)) continue;
           const tInfo = tables[tableName];
           if (!tInfo || !tInfo.sql_script) continue;
 
@@ -175,12 +188,15 @@ export class SqlScriptMiningStrategy {
 
   _extractJoinsFromScript(script, currentMartKey, graph) {
     if (!script) return;
+    if (isTemporaryTable(currentMartKey)) return;
 
     // Регулярное выражение для извлечения FROM таблицы
     const fromRegex = /\bfrom\s+([a-zA-Z0-9_\.]+)(?:\s+(?:as\s+)?([a-zA-Z0-9_]+))?/i;
     const fromMatch = fromRegex.exec(script);
     const baseTableRaw = fromMatch ? fromMatch[1] : null;
     const baseAlias = fromMatch && fromMatch[2] ? fromMatch[2] : null;
+
+    if (isTemporaryTable(baseTableRaw)) return;
 
     // Карта алиасов в этом запросе
     const aliasMap = new Map();
@@ -225,11 +241,13 @@ export class SqlScriptMiningStrategy {
     const sourceAliasMap = Object.fromEntries(aliasMap);
 
     for (const j of joins) {
+      if (isTemporaryTable(j.joinedTable)) continue;
       allTablesInQuery.push({ table: j.joinedTable, alias: j.joinedAlias });
 
       // Пытаемся понять, с какими таблицами из запроса соединяется j
       for (const prior of allTablesInQuery) {
         if (prior.table === j.joinedTable) continue;
+        if (isTemporaryTable(prior.table)) continue;
 
         const priorAlias = prior.alias ? prior.alias.toLowerCase() : null;
         const priorName = normalizeTableName(prior.table);
@@ -522,7 +540,11 @@ export function findMissingTables(edge, leftTable, rightTable, currentTables, ca
     seenAliases.add(aliasLower);
 
     const rawTableName = sourceAliasMap[aliasLower] || aliasLower;
+    // Игнорируем временные таблицы (tmp_*), чтобы не предлагать их для добавления в шаблон
+    if (isTemporaryTable(rawTableName)) continue;
+
     const resolved = resolveTableInfo(rawTableName, catalogData);
+    if (resolved && isTemporaryTable(resolved.table)) continue;
 
     const normName = resolved ? normalizeTableName(resolved.table) : normalizeTableName(rawTableName);
     const fullKey = resolved ? resolved.fullKey.toLowerCase() : rawTableName.toLowerCase();
@@ -696,10 +718,16 @@ export function buildJoinPlan(tables, options = {}) {
       for (const target of connected) {
         const directEdges = knowledgeGraph.getDirectEdges(target, candidate) || [];
         for (const edge of directEdges) {
+          // Исключаем временные таблицы и витрины (tmp_*) из кандидатов умного ранжирования
+          if (isTemporaryTable(edge.sourceMart) ||
+              isTemporaryTable(edge.originalLeftTable) ||
+              isTemporaryTable(edge.originalRightTable)) {
+            continue;
+          }
           candidateEdges.push({ edge, target });
         }
 
-        if (commonKeyStrategy) {
+        if (commonKeyStrategy && !isTemporaryTable(target) && !isTemporaryTable(candidate)) {
           const keyMatch = commonKeyStrategy.findJoin(target, candidate, catalogData);
           if (keyMatch) {
             candidateEdges.push({ edge: keyMatch, target });

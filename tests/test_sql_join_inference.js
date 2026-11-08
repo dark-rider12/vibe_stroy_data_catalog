@@ -4,7 +4,7 @@
 
 import fs from "fs";
 import path from "path";
-import { generateSqlTemplate, buildJoinPlan } from "../src/utils/sqlJoinInference.js";
+import { generateSqlTemplate, buildJoinPlan, isTemporaryTable, findMissingTables } from "../src/utils/sqlJoinInference.js";
 
 function runTest() {
   console.log("======================================================");
@@ -158,6 +158,36 @@ function runTest() {
     throw new Error("После добавления card_detail список missingTables должен быть пустым");
   }
 
+  // 7. Тест фильтрации временных таблиц (tmp_*)
+  if (!isTemporaryTable("tmp_draft") || !isTemporaryTable("dds.core.tmp_calc") || !isTemporaryTable("dm.ext_dds.tmp_tbl")) {
+    throw new Error("isTemporaryTable должна возвращать true для любых таблиц с префиксом tmp_");
+  }
+  if (isTemporaryTable("account_detail") || isTemporaryTable("dds.core.card_detail")) {
+    throw new Error("isTemporaryTable должна возвращать false для постоянных таблиц");
+  }
+
+  // Проверяем, что временные таблицы tmp_* не попадают в missingTables
+  const edgeWithTmp = {
+    condition: "ad.account_id = cd.account_id AND tmp_test.id = cd.id",
+    originalLeftTable: "account_detail",
+    originalRightTable: "card_detail",
+    originalLeftAlias: "ad",
+    originalRightAlias: "cd",
+    sourceAliasMap: {
+      "tmp_test": "dds.core.tmp_test"
+    }
+  };
+  const missingTmp = findMissingTables(
+    edgeWithTmp,
+    { db: "dds", schema: "core", table: "account_detail" },
+    { db: "dds", schema: "core", table: "card_detail" },
+    testTables,
+    catalogData
+  );
+  if (missingTmp.some(m => m.table.startsWith("tmp_"))) {
+    throw new Error("Таблицы с префиксом tmp_ не должны попадать в подсказки missingTables");
+  }
+
   console.log("✓ Чистый SELECT формируется без CTAS и без шапки");
   console.log("✓ Таблицы из одной БД dds остаются локальными (без ext_*)");
   console.log("✓ Автоматический переход dds.core -> dm.ext_dds при кросс-базовом запросе (dm + dds)");
@@ -168,6 +198,7 @@ function runTest() {
   console.log("✓ Недостающие таблицы (missingTables) корректно выявляются с исходными алиасами");
   console.log("✓ Условия с чужими алиасами сохраняются без принудительной очистки");
   console.log("✓ При добавлении зависимой таблицы в шаблон статус становится чистым");
+  console.log("✓ Временные таблицы (tmp_*) полностью отфильтровываются из ранжирования и подсказок");
   console.log("✓ ВСЕ ПРОВЕРКИ JOIN INFERENCE ПРОЙДЕНЫ УСПЕШНО");
   console.log("======================================================");
 }

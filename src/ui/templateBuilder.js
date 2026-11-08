@@ -607,12 +607,13 @@ export function initTemplateBuilder() {
     });
   }
 
-  // Закрытие панели при клике мышкой левее панели (вне шторки)
-  let mouseDownInsideDrawer = false;
+  // Закрытие панели при клике мышкой вне шторки:
+  // ПРАВИЛО: Никакой клик в левой боковой панели (сайдбаре) не должен сворачивать правую панель.
+  // Только клики в центральной рабочей области (.content) должны сворачивать правую панель.
+  let mouseDownTarget = null;
 
   document.addEventListener("mousedown", (e) => {
-    const drawer = document.getElementById("template-builder-drawer");
-    mouseDownInsideDrawer = !!(drawer && drawer.contains(e.target));
+    mouseDownTarget = e.target;
   });
 
   document.addEventListener("click", (e) => {
@@ -620,29 +621,42 @@ export function initTemplateBuilder() {
     const drawer = document.getElementById("template-builder-drawer");
     if (!drawer) return;
 
-    // Если нажатие мыши началось внутри панели (например, выделение кода/текста) — не закрываем
-    if (mouseDownInsideDrawer) return;
-
-    // Не закрываем при кликах внутри левой боковой панели (сайдбара) или на кнопках управления сайдбаром
-    if (e.target.closest("#sidebar") || e.target.closest("#sidebarToggleBtn") || e.target.closest("#resizer")) {
+    // 1. Если клик или нажатие мыши началось внутри панели — не закрываем
+    if (drawer.contains(e.target) || (mouseDownTarget && drawer.contains(mouseDownTarget))) {
       return;
     }
 
-    // Если клик внутри самой панели
-    if (drawer.contains(e.target)) return;
-
-    // Если клик по кнопке в шапке (у неё собственный обработчик toggle)
+    // 2. Если клик по кнопке в шапке (у неё собственный обработчик toggle)
     if (e.target.closest("#tb-header-toggle-btn")) return;
 
-    // Если клик по тосту
-    if (e.target.closest(".tb-toast")) return;
+    // 3. Если клик по тосту или краевой зоне
+    if (e.target.closest(".tb-toast") || e.target.closest("#tb-edge-dropzone")) return;
 
-    // Если в этот момент происходил ресайз или перетаскивание таблицы
+    // 4. Если в этот момент происходил ресайз или перетаскивание таблицы
     if (document.body.classList.contains("tb-dragging-active") || drawer.classList.contains("tb-is-resizing-drawer")) {
       return;
     }
 
-    toggleTemplateBuilder(false);
+    // 5. ЖЕСТКОЕ ПРАВИЛО: никакой клик в левой боковой панели не должен сворачивать правую панель
+    // Проверяем как по DOM-структуре (#sidebar, #sidebarToggleBtn, #resizer),
+    // так и геометрически по координатам левой панели (на случай динамических элементов или скроллбара)
+    const sidebar = document.getElementById("sidebar");
+    if (e.target.closest("#sidebar") || e.target.closest("#sidebarToggleBtn") || e.target.closest("#resizer") ||
+        (mouseDownTarget && (mouseDownTarget.closest("#sidebar") || mouseDownTarget.closest("#sidebarToggleBtn") || mouseDownTarget.closest("#resizer")))) {
+      return;
+    }
+    if (sidebar) {
+      const sidebarRect = sidebar.getBoundingClientRect();
+      if (e.clientX <= (sidebarRect.right + 10)) {
+        return;
+      }
+    }
+
+    // 6. Только клики в центральной рабочей области (.content) сворачивают правую панель
+    const contentArea = document.querySelector(".content");
+    if (contentArea && contentArea.contains(e.target)) {
+      toggleTemplateBuilder(false);
+    }
   });
 
   // Первоначальный рендер
