@@ -147,6 +147,7 @@ docs/
 | 8 | Smart Rebuild / Smart Execution Helper | пересчёт, пересборка, rebuild, new data, smart execution, выгрузка sql, очередь выполнения | `src/lineage/tableLineageRebuild.js` | `docs/SMART_EXECUTION_HELPER.md` |
 | 9 | SQL Obfuscator / Деобфускатор | обфускатор, деобфускатор, obfuscator, deobfuscate, alt+o, обезличивание, безопасный запрос, анонимизация | `src/utils/sqlObfuscator.js`, `src/ui/aiObfuscatorModal.js` | `docs/SQL_OBFUSCATOR.md` |
 | 10 | Script Delivery Mode (CTAS → DDL + INSERT) | ctas, ddl, insert, поставка, режим скрипта, script mode, dev контур, test контур | `src/utils/scriptTransform.js`, `templates/table.html` | `docs/SCRIPT_DELIVERY_MODE.md` |
+| 11 | Template Generator (Конструктор витрин) | шаблон, прототип, витрин, генератор шаблонов, template, join, драг, drag, drop | `src/utils/sqlJoinInference.js`, `src/ui/templateBuilder.js` | `docs/TEMPLATE_GENERATOR.md` |
 
 ## Правила чтения
 

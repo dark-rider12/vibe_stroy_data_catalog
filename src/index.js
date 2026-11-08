@@ -29,6 +29,7 @@ import {
 } from "./lineage/tableLineageStale.js";
 import { initAiObfuscator, toggleAiObfuscatorModal } from "./ui/aiObfuscatorModal.js";
 import { switchScriptMode } from "./utils/scriptTransform.js";
+import { initTemplateBuilder, toggleTemplateBuilder, clearBuilderTables, generateTemplateSql } from "./ui/templateBuilder.js";
 
 // Экспортируем данные и функции в глобальную область видимости,
 // так как они вызываются из inline-обработчиков в HTML (onclick, ondblclick и т.д.)
@@ -89,6 +90,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Инициализация AI-обфускатора (хоткей Alt + O)
   initAiObfuscator();
+  initTemplateBuilder();
 
   // Вызываем обработчик навигации для текущего URL
   handleNavigation();

@@ -17,7 +17,7 @@
     "build": "npm run build:js",
     "build:js": "esbuild src/index.js --bundle --outfile=static/main.js --minify && node scripts/postbuild.js",
     "build:html": "python3 generate_catalog.py",
-    "test": "npm run test:lineage",
+    "test": "npm run test:lineage && node tests/test_sql_join_inference.js",
     "test:lineage": "esbuild tests/verify_lineages.js --bundle --outfile=tests/.run_test.cjs --platform=node && node tests/.run_test.cjs"
   },
   "keywords": [],
