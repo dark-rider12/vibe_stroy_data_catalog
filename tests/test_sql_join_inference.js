@@ -4,7 +4,14 @@
 
 import fs from "fs";
 import path from "path";
-import { generateSqlTemplate, buildJoinPlan, isTemporaryTable, findMissingTables } from "../src/utils/sqlJoinInference.js";
+import { 
+  generateSqlTemplate, 
+  buildJoinPlan, 
+  isTemporaryTable, 
+  findMissingTables,
+  hasHistoricalDates,
+  canApplyTimelineSlicing 
+} from "../src/utils/sqlJoinInference.js";
 
 function runTest() {
   console.log("======================================================");
@@ -186,6 +193,95 @@ function runTest() {
   );
   if (missingTmp.some(m => m.table.startsWith("tmp_"))) {
     throw new Error("Таблицы с префиксом tmp_ не должны попадать в подсказки missingTables");
+  }
+
+  // 8. Тест детектора версионных измерений (Timeline Slicing Detector)
+  const mockScdCatalog = {
+    dds: {
+      core: {
+        dim_client: {
+          columns: [
+            { name: "client_id", type: "bigint" },
+            { name: "client_name", type: "text" },
+            { name: "dwh_start_date", type: "timestamp" },
+            { name: "dwh_end_date", type: "timestamp" }
+          ]
+        },
+        dim_account: {
+          columns: [
+            { name: "account_id", type: "bigint" },
+            { name: "client_id", type: "bigint" },
+            { name: "account_num", type: "text" },
+            { name: "dwh_start_date", type: "timestamp" },
+            { name: "dwh_end_date", type: "timestamp" }
+          ]
+        },
+        no_dates_table: {
+          columns: [
+            { name: "id", type: "bigint" },
+            { name: "name", type: "text" }
+          ]
+        }
+      }
+    }
+  };
+
+  const scdTables = [
+    { db: "dds", schema: "core", table: "dim_client" },
+    { db: "dds", schema: "core", table: "dim_account" }
+  ];
+
+  if (!hasHistoricalDates(scdTables[0], mockScdCatalog) || !hasHistoricalDates(scdTables[1], mockScdCatalog)) {
+    throw new Error("hasHistoricalDates должна возвращать true для таблиц с dwh_start_date и dwh_end_date");
+  }
+  if (hasHistoricalDates({ db: "dds", schema: "core", table: "no_dates_table" }, mockScdCatalog)) {
+    throw new Error("hasHistoricalDates должна возвращать false для таблиц без исторических дат");
+  }
+
+  if (!canApplyTimelineSlicing(scdTables, mockScdCatalog)) {
+    throw new Error("canApplyTimelineSlicing должна возвращать true, если все таблицы содержат исторические даты");
+  }
+  if (canApplyTimelineSlicing([scdTables[0]], mockScdCatalog)) {
+    throw new Error("canApplyTimelineSlicing должна возвращать false для 1 таблицы");
+  }
+  if (canApplyTimelineSlicing([...scdTables, { db: "dds", schema: "core", table: "no_dates_table" }], mockScdCatalog)) {
+    throw new Error("canApplyTimelineSlicing должна возвращать false, если хотя бы одна таблица не имеет SCD2 дат");
+  }
+
+  // 9. Тест генерации SQL-шаблона в режиме Timeline Slicing
+  const normalSql = generateSqlTemplate(scdTables, { 
+    catalogData: mockScdCatalog, 
+    enableTimelineSlicing: false 
+  });
+  if (normalSql.includes("WITH timeline_events") || !normalSql.startsWith("SELECT")) {
+    throw new Error("При enableTimelineSlicing: false должен формироваться обычный SELECT без CTE");
+  }
+
+  const timelineSql = generateSqlTemplate(scdTables, { 
+    catalogData: mockScdCatalog, 
+    enableTimelineSlicing: true 
+  });
+
+  if (!timelineSql.includes("WITH timeline_events AS (")) {
+    throw new Error("В режиме Timeline Slicing должен генерироваться CTE timeline_events");
+  }
+  if (!timelineSql.includes("timeline_intervals AS (") || !timelineSql.includes("LEAD(change_dt) OVER")) {
+    throw new Error("В режиме Timeline Slicing должна выполняться нарезка интервалов через LEAD(change_dt)");
+  }
+  if (!timelineSql.includes("clean_intervals AS (") || !timelineSql.includes("valid_from < valid_to")) {
+    throw new Error("В режиме Timeline Slicing должен генерироваться CTE clean_intervals с отсечением пустых интервалов");
+  }
+  if (!timelineSql.includes("FROM clean_intervals i")) {
+    throw new Error("Главный SELECT должен строиться от clean_intervals i");
+  }
+  if (!timelineSql.includes("WHEN i.valid_to >= '9999-12-31'::timestamp THEN true")) {
+    throw new Error("Поле is_active должно вычисляться как true только для интервалов с датой 9999");
+  }
+  if (!timelineSql.includes("i.valid_from >= dc.dwh_start_date") || !timelineSql.includes("i.valid_from <  dc.dwh_end_date")) {
+    throw new Error("Джойны таблиц должны содержать фильтр попадания в интервал valid_from");
+  }
+  if (!timelineSql.includes("i.valid_from AS dwh_start_date") || !timelineSql.includes("i.valid_to   AS dwh_end_date")) {
+    throw new Error("Результирующие поля dwh_start_date и dwh_end_date должны браться из valid_from и valid_to");
   }
 
   console.log("✓ Чистый SELECT формируется без CTAS и без шапки");

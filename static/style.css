@@ -6811,6 +6811,84 @@ path.ln-edge-line.ln-edge-stale {
     stroke: var(--white);
 }
 
+/* Всплывающий переключатель Timeline Slicing */
+.tb-timeline-group {
+    margin-top: 6px;
+    padding: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    transition: all 0.25s ease;
+    animation: tbFadeSlideIn 0.25s ease-out;
+}
+
+@keyframes tbFadeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.tb-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    color: var(--text-dark);
+}
+
+.tb-checkbox {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-blue);
+    cursor: pointer;
+    margin: 0;
+}
+
+.tb-checkbox-text {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.tb-timeline-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: #eff6ff;
+    color: #2563eb;
+    border: 1px solid #bfdbfe;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+}
+
+.tb-timeline-hint {
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-gray);
+    padding-left: 24px;
+}
+
+.tb-timeline-hint code {
+    background: #e2e8f0;
+    color: #1e293b;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 10.5px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
 /* Блок результатов */
 .tb-result-box {
     border: 1px solid var(--border);

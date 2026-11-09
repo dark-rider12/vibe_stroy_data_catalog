@@ -186,6 +186,20 @@
                         <option value="JOIN">JOIN</option>
                     </select>
                 </div>
+                <div class="tb-form-group tb-timeline-group" id="tb-timeline-group" style="display: none;">
+                    <label class="tb-checkbox-label" for="tb-timeline-checkbox">
+                        <input type="checkbox" id="tb-timeline-checkbox" class="tb-checkbox">
+                        <span class="tb-checkbox-custom"></span>
+                        <span class="tb-checkbox-text">
+                            <strong>Timeline Slicing</strong> (нарезка временных интервалов)
+                            <span class="tb-timeline-badge">SCD2</span>
+                        </span>
+                    </label>
+                    <div class="tb-timeline-hint">
+                        Все выбранные таблицы содержат <code>dwh_start_date</code> и <code>dwh_end_date</code>. 
+                        Включите для автоматического выравнивания исторических периодов версий.
+                    </div>
+                </div>
             </div>
 
             <button type="button" class="tb-generate-btn" onclick="generateTemplateSql()">

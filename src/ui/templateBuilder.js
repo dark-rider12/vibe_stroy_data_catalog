@@ -6,7 +6,7 @@ ROLE: UI-компонент «Генератор шаблонов витрин»
 DESIGN: Полностью реактивное разделение State -> Render -> Actions для простого расширения.
 */
 
-import { generateSqlTemplate, buildJoinPlan, getTableKey } from "../utils/sqlJoinInference.js";
+import { generateSqlTemplate, buildJoinPlan, getTableKey, canApplyTimelineSlicing } from "../utils/sqlJoinInference.js";
 import { copyText } from "../utils/helpers.js";
 
 // ============================================================================
@@ -19,6 +19,7 @@ export const templateBuilderState = {
   baseTableKey: null, // tableKey главной таблицы (FROM)
   userSelectedSources: {}, // Map<tableKey, sourceId> - пользовательский выбор источника связи
   defaultJoinType: "LEFT JOIN",
+  enableTimelineSlicing: false, // Режим нарезки временных интервалов SCD2
   generatedSql: "",
   listeners: new Set(),
 
@@ -140,6 +141,7 @@ export function clearBuilderTables() {
   templateBuilderState.selectedTables = [];
   templateBuilderState.baseTableKey = null;
   templateBuilderState.userSelectedSources = {};
+  templateBuilderState.enableTimelineSlicing = false;
   templateBuilderState.generatedSql = "";
   templateBuilderState.notify();
 }
@@ -182,7 +184,8 @@ export function generateTemplateSql() {
     catalogData: catalogData,
     baseTableKey: templateBuilderState.baseTableKey,
     defaultJoinType: templateBuilderState.defaultJoinType,
-    userSelectedSources: templateBuilderState.userSelectedSources
+    userSelectedSources: templateBuilderState.userSelectedSources,
+    enableTimelineSlicing: templateBuilderState.enableTimelineSlicing
   });
 
   templateBuilderState.generatedSql = sql;
@@ -533,6 +536,28 @@ function updateBuilderUI() {
   const listContainer = document.getElementById("tb-tables-list");
   renderTableList(listContainer);
 
+  // Управление видимостью чек-бокса Timeline Slicing
+  const timelineGroup = document.getElementById("tb-timeline-group");
+  const timelineCheckbox = document.getElementById("tb-timeline-checkbox");
+  const canSlicing = canApplyTimelineSlicing(templateBuilderState.selectedTables, window.catalogData);
+
+  if (timelineGroup) {
+    if (canSlicing) {
+      timelineGroup.style.display = "flex";
+      timelineGroup.classList.add("tb-visible");
+      if (timelineCheckbox) {
+        timelineCheckbox.checked = !!templateBuilderState.enableTimelineSlicing;
+      }
+    } else {
+      timelineGroup.style.display = "none";
+      timelineGroup.classList.remove("tb-visible");
+      templateBuilderState.enableTimelineSlicing = false;
+      if (timelineCheckbox) {
+        timelineCheckbox.checked = false;
+      }
+    }
+  }
+
   const resultContainer = document.getElementById("tb-result-container");
   renderOutput(resultContainer);
 }
@@ -601,6 +626,16 @@ export function initTemplateBuilder() {
   if (joinTypeSelect) {
     joinTypeSelect.addEventListener("change", (e) => {
       templateBuilderState.defaultJoinType = e.target.value;
+      if (templateBuilderState.generatedSql) {
+        generateTemplateSql();
+      }
+    });
+  }
+
+  const timelineCheckbox = document.getElementById("tb-timeline-checkbox");
+  if (timelineCheckbox) {
+    timelineCheckbox.addEventListener("change", (e) => {
+      templateBuilderState.enableTimelineSlicing = e.target.checked;
       if (templateBuilderState.generatedSql) {
         generateTemplateSql();
       }

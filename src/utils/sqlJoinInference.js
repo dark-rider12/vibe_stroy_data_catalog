@@ -995,6 +995,266 @@ export function determineTargetDb(tables, baseTableKey = null) {
   return tables[0]?.db?.toLowerCase() || "dm";
 }
 
+const TECHNICAL_COLUMN_NAMES = new Set([
+  "source_system_id",
+  "is_active",
+  "is_deleted",
+  "dwh_start_date",
+  "dwh_end_date",
+  "etl_process_id"
+]);
+
+/**
+ * Проверяет, содержит ли таблица колонки dwh_start_date и dwh_end_date.
+ * @param {object} tableObj 
+ * @param {object} catalogData 
+ * @returns {boolean}
+ */
+export function hasHistoricalDates(tableObj, catalogData) {
+  if (!tableObj || !catalogData) return false;
+  const dbData = catalogData[tableObj.db] || catalogData[tableObj.db?.toLowerCase()] || catalogData[tableObj.db?.toUpperCase()];
+  if (!dbData) return false;
+  const schemaData = dbData[tableObj.schema] || dbData[tableObj.schema?.toLowerCase()] || dbData[tableObj.schema?.toUpperCase()];
+  if (!schemaData) return false;
+  const tblData = schemaData[tableObj.table] || schemaData[tableObj.table?.toLowerCase()] || schemaData[tableObj.table?.toUpperCase()];
+  if (!tblData || !Array.isArray(tblData.columns)) return false;
+
+  const colNames = new Set(tblData.columns.map(c => (c.name || "").toLowerCase()));
+  return colNames.has("dwh_start_date") && colNames.has("dwh_end_date");
+}
+
+/**
+ * Проверяет, можно ли применить режим Timeline Slicing для выбранного набора таблиц.
+ * Требуется: не менее 2 таблиц и у каждой есть dwh_start_date и dwh_end_date.
+ * @param {Array<object>} selectedTables 
+ * @param {object} catalogData 
+ * @returns {boolean}
+ */
+export function canApplyTimelineSlicing(selectedTables, catalogData) {
+  if (!selectedTables || selectedTables.length < 2 || !catalogData) {
+    return false;
+  }
+  return selectedTables.every(t => hasHistoricalDates(t, catalogData));
+}
+
+function getTableColumns(tableObj, catalogData) {
+  if (!tableObj || !catalogData) return [];
+  const dbData = catalogData[tableObj.db] || catalogData[tableObj.db?.toLowerCase()] || catalogData[tableObj.db?.toUpperCase()];
+  if (!dbData) return [];
+  const schemaData = dbData[tableObj.schema] || dbData[tableObj.schema?.toLowerCase()] || dbData[tableObj.schema?.toUpperCase()];
+  if (!schemaData) return [];
+  const tblData = schemaData[tableObj.table] || schemaData[tableObj.table?.toLowerCase()] || schemaData[tableObj.table?.toUpperCase()];
+  if (!tblData || !Array.isArray(tblData.columns)) return [];
+  return tblData.columns.map(c => c.name);
+}
+
+/**
+ * Генерирует SQL-шаблон с нарезкой временных интервалов (Timeline Slicing) для SCD Type 2 таблиц.
+ */
+function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalogData) {
+  const { fromTable, fromAlias, joinPlan, explanations } = plan;
+
+  // Извлекаем парные равенства из условий JOIN
+  const eqRegex = /\b([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\b/g;
+  const equalities = [];
+  for (const j of joinPlan) {
+    let m;
+    const cond = j.condition || "";
+    while ((m = eqRegex.exec(cond)) !== null) {
+      equalities.push({
+        leftAlias: m[1].toLowerCase(),
+        leftCol: m[2].toLowerCase(),
+        rightAlias: m[3].toLowerCase(),
+        rightCol: m[4].toLowerCase()
+      });
+    }
+  }
+
+  // Находим ключевые колонки соединения базовой таблицы (fromTable)
+  const fromKeyCols = [];
+  for (const eq of equalities) {
+    if (eq.leftAlias === fromAlias.toLowerCase() && !fromKeyCols.includes(eq.leftCol)) {
+      fromKeyCols.push(eq.leftCol);
+    }
+    if (eq.rightAlias === fromAlias.toLowerCase() && !fromKeyCols.includes(eq.rightCol)) {
+      fromKeyCols.push(eq.rightCol);
+    }
+  }
+
+  // Fallback: если ключ не распознан из условий равенства, берем первый id / *_id столбец
+  if (fromKeyCols.length === 0) {
+    const fromCols = getTableColumns(fromTable, catalogData);
+    const idCol = fromCols.find(c => c.toLowerCase().endsWith("_id") && !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase())) || fromCols[0] || "id";
+    fromKeyCols.push(idCol);
+  }
+
+  // Хелпер сопоставления колонок ключа для присоединенной таблицы
+  const getMatchingKeySelect = (targetAlias, targetTable) => {
+    return fromKeyCols.map(kCol => {
+      // 1. Ищем прямое равенство в условиях JOIN
+      for (const eq of equalities) {
+        if (eq.leftAlias === targetAlias.toLowerCase() && eq.rightAlias === fromAlias.toLowerCase() && eq.rightCol === kCol) {
+          return eq.leftCol === kCol ? eq.leftCol : `${eq.leftCol} AS ${kCol}`;
+        }
+        if (eq.rightAlias === targetAlias.toLowerCase() && eq.leftAlias === fromAlias.toLowerCase() && eq.leftCol === kCol) {
+          return eq.rightCol === kCol ? eq.rightCol : `${eq.rightCol} AS ${kCol}`;
+        }
+      }
+      // 2. Проверяем наличие колонки с таким же именем в целевой таблице
+      const targetCols = getTableColumns(targetTable, catalogData).map(c => c.toLowerCase());
+      if (targetCols.includes(kCol.toLowerCase())) {
+        return kCol;
+      }
+      return kCol;
+    }).join(", ");
+  };
+
+  const lines = [];
+
+  lines.push("-- ============================================================================");
+  lines.push("-- ШАБЛОН: Timeline Slicing (хронологическое совмещение SCD2-измерений)");
+  lines.push("-- ============================================================================");
+  lines.push("");
+
+  // 1. CTE timeline_events: собираем все точки изменения дат (dwh_start_date и dwh_end_date)
+  lines.push("WITH timeline_events AS (");
+  const eventQueries = [];
+
+  const fromFull = formatTableReferenceForTarget(fromTable, effectiveTargetDb);
+  const fromKeySelect = fromKeyCols.join(", ");
+  eventQueries.push(`    SELECT ${fromKeySelect}, dwh_start_date AS change_dt FROM ${fromFull}`);
+  eventQueries.push(`    UNION`);
+  eventQueries.push(`    SELECT ${fromKeySelect}, dwh_end_date   AS change_dt FROM ${fromFull}`);
+
+  for (const j of joinPlan) {
+    const jFull = formatTableReferenceForTarget(j.table, effectiveTargetDb);
+    const jKeySelect = getMatchingKeySelect(j.alias, j.table);
+    eventQueries.push(`    UNION`);
+    eventQueries.push(`    SELECT ${jKeySelect}, dwh_start_date AS change_dt FROM ${jFull}`);
+    eventQueries.push(`    UNION`);
+    eventQueries.push(`    SELECT ${jKeySelect}, dwh_end_date   AS change_dt FROM ${jFull}`);
+  }
+
+  lines.push(eventQueries.join("\n"));
+  lines.push("),");
+  lines.push("");
+
+  // 2. CTE timeline_intervals: нарезка элементарных интервалов через LEAD
+  const partitionCols = fromKeyCols.join(", ");
+  lines.push("timeline_intervals AS (");
+  lines.push("    SELECT");
+  lines.push(`        ${partitionCols},`);
+  lines.push("        change_dt AS valid_from,");
+  lines.push(`        LEAD(change_dt) OVER (PARTITION BY ${partitionCols} ORDER BY change_dt) AS valid_to`);
+  lines.push("    FROM (");
+  lines.push(`        SELECT DISTINCT ${partitionCols}, change_dt`);
+  lines.push("        FROM timeline_events");
+  lines.push("    ) t");
+  lines.push("),");
+  lines.push("");
+
+  // 3. CTE clean_intervals: фильтрация завершенных интервалов
+  lines.push("clean_intervals AS (");
+  lines.push(`    SELECT ${partitionCols}, valid_from, valid_to`);
+  lines.push("    FROM timeline_intervals");
+  lines.push("    WHERE valid_to IS NOT NULL");
+  lines.push("      AND valid_from < valid_to");
+  lines.push(")");
+  lines.push("");
+
+  // 4. Финальный SELECT
+  lines.push("SELECT");
+  const selectParts = [];
+
+  // Бизнес-поля базовой таблицы (без технических SCD полей)
+  const fromCols = getTableColumns(fromTable, catalogData).filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()));
+  if (fromCols.length > 0) {
+    fromCols.forEach(c => selectParts.push(`    ${fromAlias}.${c}`));
+  } else {
+    selectParts.push(`    ${fromAlias}.*`);
+  }
+
+  // Бизнес-поля присоединенных таблиц
+  for (const j of joinPlan) {
+    const jCols = getTableColumns(j.table, catalogData).filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()));
+    if (jCols.length > 0) {
+      jCols.forEach(c => selectParts.push(`    ${j.alias}.${c}`));
+    } else {
+      selectParts.push(`    ${j.alias}.*`);
+    }
+  }
+
+  // Технические поля результирующего измерения
+  selectParts.push("");
+  selectParts.push("    -- Технические поля результирующего измерения (SCD Type 2):");
+  selectParts.push(`    ${fromAlias}.source_system_id,`);
+  selectParts.push("    CASE");
+  selectParts.push("        WHEN i.valid_to >= '9999-12-31'::timestamp THEN true");
+  selectParts.push("        ELSE false");
+  selectParts.push("    END AS is_active,");
+
+  const allAliases = [fromAlias, ...joinPlan.map(j => j.alias)];
+  const isDeletedExpr = allAliases.map(a => `COALESCE(${a}.is_deleted, false)`).join(" OR ");
+  selectParts.push(`    (${isDeletedExpr}) AS is_deleted,`);
+  selectParts.push("    i.valid_from AS dwh_start_date,");
+  selectParts.push("    i.valid_to   AS dwh_end_date,");
+  selectParts.push("    uuid_generate_v5(uuid_nil(), 1::text) AS etl_process_id");
+
+  // Объединяем колонки через запятую
+  for (let idx = 0; idx < selectParts.length; idx++) {
+    const line = selectParts[idx];
+    if (!line.trim() || line.trim().startsWith("--")) continue;
+    // Если следующая строка не пустая и не комментарий, и сама строка не оканчивается запятой
+    if (!line.trimEnd().endsWith(",")) {
+      selectParts[idx] = `${line},`;
+    }
+  }
+  // У последней строки перед FROM запятую убираем
+  for (let idx = selectParts.length - 1; idx >= 0; idx--) {
+    if (selectParts[idx].trimEnd().endsWith(",")) {
+      selectParts[idx] = selectParts[idx].trimEnd().slice(0, -1);
+      break;
+    }
+  }
+
+  lines.push(selectParts.join("\n"));
+  lines.push("");
+
+  // 5. Блок FROM clean_intervals и джойны по интервалам
+  lines.push("FROM clean_intervals i");
+
+  // Соединение базовой таблицы с интервалами
+  const fromIntervalOn = fromKeyCols.map(k => `${fromAlias}.${k} = i.${k}`).join(" AND ");
+  lines.push(`LEFT JOIN ${fromFull} ${fromAlias}`);
+  lines.push(`    ON ${fromIntervalOn}`);
+  lines.push(`   AND i.valid_from >= ${fromAlias}.dwh_start_date`);
+  lines.push(`   AND i.valid_from <  ${fromAlias}.dwh_end_date`);
+
+  // Соединение каждой последующей таблицы
+  for (const j of joinPlan) {
+    const jFull = formatTableReferenceForTarget(j.table, effectiveTargetDb);
+    const jt = j.joinType === "INNER JOIN" ? "JOIN" : j.joinType;
+    lines.push(`${jt} ${jFull} ${j.alias}`);
+    lines.push(`    ON ${j.condition}`);
+    lines.push(`   AND i.valid_from >= ${j.alias}.dwh_start_date`);
+    lines.push(`   AND i.valid_from <  ${j.alias}.dwh_end_date`);
+  }
+
+  lines.push(";");
+
+  // 6. Пояснения
+  lines.push("");
+  lines.push("/* ----------------------------------------------------------------------------");
+  lines.push("Режим: Timeline Slicing (хронологическое совмещение версий SCD Type 2)");
+  lines.push("Использованные источники связей:");
+  for (const exp of explanations) {
+    lines.push(` * [${exp.left}] <-> [${exp.right}]: ${exp.source}`);
+  }
+  lines.push("---------------------------------------------------------------------------- */");
+
+  return lines.join("\n");
+}
+
 /**
  * Генерирует готовый текстовый SQL-скрипт (SELECT-запрос) шаблона витрины.
  * @param {Array<object>} tables 
@@ -1008,7 +1268,8 @@ export function generateSqlTemplate(tables, options = {}) {
     catalogData = null,
     baseTableKey = null,
     defaultJoinType = "LEFT JOIN",
-    userSelectedSources = null
+    userSelectedSources = null,
+    enableTimelineSlicing = false
   } = options;
 
   if (!tables || tables.length === 0) {
@@ -1031,6 +1292,11 @@ export function generateSqlTemplate(tables, options = {}) {
     defaultJoinType,
     userSelectedSources
   });
+
+  // Если включен режим Timeline Slicing и условия применимости соблюдены — генерируем хронологический шаблон
+  if (enableTimelineSlicing && canApplyTimelineSlicing(tables, catalogData)) {
+    return generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalogData);
+  }
   const { fromTable, fromAlias, joinPlan, explanations } = plan;
 
   const lines = [];
