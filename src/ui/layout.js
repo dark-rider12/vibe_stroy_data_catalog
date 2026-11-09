@@ -24,6 +24,11 @@ export function initLayout() {
       if (newWidth > window.innerWidth / 2) newWidth = window.innerWidth / 2;
       if (newWidth > 800) newWidth = 800;
       sidebar.style.width = newWidth + "px";
+      document.documentElement.style.setProperty("--sidebar-width", newWidth + "px");
+      const drawer = document.getElementById("template-builder-drawer");
+      if (drawer) {
+        drawer.style.left = newWidth + "px";
+      }
     });
 
     document.addEventListener("mouseup", () => {
@@ -45,9 +50,16 @@ export function toggleSidebar() {
   if (isSidebarCollapsed) {
     sidebar.classList.add("collapsed");
     document.body.classList.add("sidebar-collapsed");
+    document.documentElement.style.setProperty("--sidebar-width", "0px");
+    const drawer = document.getElementById("template-builder-drawer");
+    if (drawer) drawer.style.left = "0px";
   } else {
     sidebar.classList.remove("collapsed");
     document.body.classList.remove("sidebar-collapsed");
+    const width = sidebar.offsetWidth || 340;
+    document.documentElement.style.setProperty("--sidebar-width", width + "px");
+    const drawer = document.getElementById("template-builder-drawer");
+    if (drawer) drawer.style.left = width + "px";
   }
 
   // После завершения CSS-transition (300ms) пересчитываем позиции ресайзеров

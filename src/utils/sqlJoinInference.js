@@ -1111,11 +1111,6 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
 
   const lines = [];
 
-  lines.push("-- ============================================================================");
-  lines.push("-- ШАБЛОН: Timeline Slicing (хронологическое совмещение SCD2-измерений)");
-  lines.push("-- ============================================================================");
-  lines.push("");
-
   // 1. CTE timeline_events: собираем все точки изменения дат (dwh_start_date и dwh_end_date)
   lines.push("WITH timeline_events AS (");
   const eventQueries = [];
@@ -1169,18 +1164,18 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
   // Бизнес-поля базовой таблицы (без технических SCD полей)
   const fromCols = getTableColumns(fromTable, catalogData).filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()));
   if (fromCols.length > 0) {
-    fromCols.forEach(c => selectParts.push(`    ${fromAlias}.${c}`));
+    fromCols.forEach(c => selectParts.push(`    ${fromAlias}.${c},`));
   } else {
-    selectParts.push(`    ${fromAlias}.*`);
+    selectParts.push(`    ${fromAlias}.*,`);
   }
 
   // Бизнес-поля присоединенных таблиц
   for (const j of joinPlan) {
     const jCols = getTableColumns(j.table, catalogData).filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()));
     if (jCols.length > 0) {
-      jCols.forEach(c => selectParts.push(`    ${j.alias}.${c}`));
+      jCols.forEach(c => selectParts.push(`    ${j.alias}.${c},`));
     } else {
-      selectParts.push(`    ${j.alias}.*`);
+      selectParts.push(`    ${j.alias}.*,`);
     }
   }
 
@@ -1199,23 +1194,6 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
   selectParts.push("    i.valid_from AS dwh_start_date,");
   selectParts.push("    i.valid_to   AS dwh_end_date,");
   selectParts.push("    uuid_generate_v5(uuid_nil(), 1::text) AS etl_process_id");
-
-  // Объединяем колонки через запятую
-  for (let idx = 0; idx < selectParts.length; idx++) {
-    const line = selectParts[idx];
-    if (!line.trim() || line.trim().startsWith("--")) continue;
-    // Если следующая строка не пустая и не комментарий, и сама строка не оканчивается запятой
-    if (!line.trimEnd().endsWith(",")) {
-      selectParts[idx] = `${line},`;
-    }
-  }
-  // У последней строки перед FROM запятую убираем
-  for (let idx = selectParts.length - 1; idx >= 0; idx--) {
-    if (selectParts[idx].trimEnd().endsWith(",")) {
-      selectParts[idx] = selectParts[idx].trimEnd().slice(0, -1);
-      break;
-    }
-  }
 
   lines.push(selectParts.join("\n"));
   lines.push("");

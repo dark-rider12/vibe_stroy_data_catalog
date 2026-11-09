@@ -147,6 +147,23 @@ export function clearBuilderTables() {
 }
 
 /**
+ * Синхронизирует координату left шторки конструктора с правым краем сайдбара.
+ */
+export function syncTemplateBuilderPosition() {
+  const drawer = document.getElementById("template-builder-drawer");
+  const sidebar = document.getElementById("sidebar");
+  const resizer = document.getElementById("resizer");
+  if (!drawer) return;
+
+  if (sidebar) {
+    const leftOffset = resizer ? resizer.getBoundingClientRect().right : sidebar.getBoundingClientRect().right;
+    const finalLeft = Math.max(0, leftOffset);
+    drawer.style.left = `${finalLeft}px`;
+    document.documentElement.style.setProperty("--sidebar-width", `${finalLeft}px`);
+  }
+}
+
+/**
  * Открывает или закрывает шторку конструктора.
  * @param {boolean} [forceState] 
  */
@@ -158,6 +175,10 @@ export function toggleTemplateBuilder(forceState) {
   const headerBtn = document.getElementById("tb-header-toggle-btn");
 
   if (drawer) {
+    drawer.style.width = ""; // Сбрасываем возможные inline-стили ширины
+    if (next) {
+      syncTemplateBuilderPosition();
+    }
     drawer.classList.toggle("open", next);
     drawer.setAttribute("aria-hidden", (!next).toString());
   }
@@ -167,6 +188,28 @@ export function toggleTemplateBuilder(forceState) {
     headerBtn.style.display = hasDrafts ? "inline-flex" : "none";
     headerBtn.classList.toggle("active", next);
   }
+}
+
+/**
+ * Открывает обучающее модальное окно Timeline Slicing.
+ */
+export function openTimelineSlicingHelpModal() {
+  const modal = document.getElementById("tb-timeline-help-modal");
+  if (!modal) return;
+  modal.style.display = "flex";
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+/**
+ * Закрывает обучающее модальное окно Timeline Slicing.
+ */
+export function closeTimelineSlicingHelpModal() {
+  const modal = document.getElementById("tb-timeline-help-modal");
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
 }
 
 /**
@@ -266,6 +309,10 @@ function initDragAndDrop() {
 
     // Подсвечиваем краевую зону, если шторка закрыта
     if (!templateBuilderState.isOpen && edgeDropzone) {
+      if (sidebar) {
+        const rect = sidebar.getBoundingClientRect();
+        edgeDropzone.style.left = `${Math.max(0, rect.right)}px`;
+      }
       edgeDropzone.classList.add("tb-edge-active");
     }
   });
@@ -277,6 +324,7 @@ function initDragAndDrop() {
 
     if (edgeDropzone) {
       edgeDropzone.classList.remove("tb-edge-active", "tb-drag-hover");
+      edgeDropzone.style.left = "";
     }
   });
 
@@ -295,6 +343,7 @@ function initDragAndDrop() {
     edgeDropzone.addEventListener("drop", (e) => {
       e.preventDefault();
       edgeDropzone.classList.remove("tb-drag-hover", "tb-edge-active");
+      edgeDropzone.style.left = "";
       document.body.classList.remove("tb-dragging-active");
 
       const dataStr = e.dataTransfer.getData("application/json");
@@ -642,6 +691,49 @@ export function initTemplateBuilder() {
     });
   }
 
+  // Кнопка справки Timeline Slicing (?)
+  const helpBtn = document.getElementById("tb-timeline-help-btn");
+  if (helpBtn) {
+    helpBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTimelineSlicingHelpModal();
+    });
+  }
+
+  // Закрытие модального окна справки при клике на оверлей вне карточки
+  const helpModal = document.getElementById("tb-timeline-help-modal");
+  if (helpModal) {
+    helpModal.addEventListener("click", (e) => {
+      if (e.target === helpModal) {
+        closeTimelineSlicingHelpModal();
+      }
+    });
+  }
+
+  // Закрытие по нажатию клавиши Escape
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const modal = document.getElementById("tb-timeline-help-modal");
+      if (modal && (modal.classList.contains("open") || modal.style.display !== "none")) {
+        e.preventDefault();
+        closeTimelineSlicingHelpModal();
+        return;
+      }
+      if (templateBuilderState.isOpen) {
+        e.preventDefault();
+        toggleTemplateBuilder(false);
+      }
+    }
+  });
+
+  // Синхронизация ширины/позиции шторки при ресайзе окна
+  window.addEventListener("resize", () => {
+    if (templateBuilderState.isOpen) {
+      syncTemplateBuilderPosition();
+    }
+  });
+
   // Закрытие панели при клике мышкой вне шторки:
   // ПРАВИЛО: Никакой клик в левой боковой панели (сайдбаре) не должен сворачивать правую панель.
   // Только клики в центральной рабочей области (.content) должны сворачивать правую панель.
@@ -708,6 +800,8 @@ window.addMissingTable = function(db, schema, table) {
   addTableToBuilder({ db, schema, table });
 };
 window.generateTemplateSql = generateTemplateSql;
+window.openTimelineSlicingHelpModal = openTimelineSlicingHelpModal;
+window.closeTimelineSlicingHelpModal = closeTimelineSlicingHelpModal;
 window.copyTemplateSql = function(btn) {
   const sql = templateBuilderState.generatedSql;
   if (!sql) return;

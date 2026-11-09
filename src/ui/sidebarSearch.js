@@ -212,11 +212,26 @@ export function initSidebarSearch() {
         e.dataTransfer.effectAllowed = "copy";
         el.classList.add("tb-is-dragging");
         document.body.classList.add("tb-dragging-active");
+
+        const edgeDropzone = document.getElementById("tb-edge-dropzone");
+        const sidebarEl = document.getElementById("sidebar");
+        if (edgeDropzone) {
+          if (sidebarEl) {
+            const rect = sidebarEl.getBoundingClientRect();
+            edgeDropzone.style.left = `${Math.max(0, rect.right)}px`;
+          }
+          edgeDropzone.classList.add("tb-edge-active");
+        }
       });
 
       el.addEventListener("dragend", () => {
         el.classList.remove("tb-is-dragging");
         document.body.classList.remove("tb-dragging-active");
+        const edgeDropzone = document.getElementById("tb-edge-dropzone");
+        if (edgeDropzone) {
+          edgeDropzone.classList.remove("tb-edge-active", "tb-drag-hover");
+          edgeDropzone.style.left = "";
+        }
       });
     });
   }

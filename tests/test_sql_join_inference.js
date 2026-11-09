@@ -262,6 +262,13 @@ function runTest() {
     enableTimelineSlicing: true 
   });
 
+  if (timelineSql.startsWith("--")) {
+    throw new Error("В режиме Timeline Slicing скрипт не должен начинаться с закомментированной шапки");
+  }
+  if (timelineSql.includes("CASE,") || timelineSql.includes("THEN true,") || timelineSql.includes("ELSE false,")) {
+    throw new Error("В CASE-выражении для is_active присутствуют лишние запятые после CASE, true или false");
+  }
+
   if (!timelineSql.includes("WITH timeline_events AS (")) {
     throw new Error("В режиме Timeline Slicing должен генерироваться CTE timeline_events");
   }
