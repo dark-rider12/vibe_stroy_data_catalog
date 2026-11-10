@@ -7,6 +7,7 @@ import path from "path";
 import { 
   generateSqlTemplate, 
   buildJoinPlan, 
+  buildHierarchyTree,
   isTemporaryTable, 
   findMissingTables,
   hasHistoricalDates,
@@ -289,6 +290,43 @@ function runTest() {
   }
   if (!timelineSql.includes("i.valid_from AS dwh_start_date") || !timelineSql.includes("i.valid_to   AS dwh_end_date")) {
     throw new Error("Результирующие поля dwh_start_date и dwh_end_date должны браться из valid_from и valid_to");
+  }
+
+  // 10. Тест ветвления соединений (userSelectedParents) и построения Join Tree (buildHierarchyTree)
+  const branchTables = [
+    { db: "dds", schema: "core", table: "account_detail" },
+    { db: "dds", schema: "core", table: "card_detail" },
+    { db: "dds", schema: "core", table: "client_account_profile" }
+  ];
+  // Зададим явное ветвление: card_detail и client_account_profile соединяются напрямую с базовой account_detail
+  const branchPlan = buildJoinPlan(branchTables, {
+    catalogData,
+    baseTableKey: "dds.core.account_detail",
+    userSelectedParents: {
+      "dds.core.card_detail": "dds.core.account_detail",
+      "dds.core.client_account_profile": "dds.core.account_detail"
+    }
+  });
+
+  const cardJoin = branchPlan.joinPlan.find(j => j.table.table === "card_detail");
+  const clientJoin = branchPlan.joinPlan.find(j => j.table.table === "client_account_profile");
+  if (!cardJoin || cardJoin.joinedWith.table !== "account_detail") {
+    throw new Error("card_detail должна быть соединена с account_detail по userSelectedParents");
+  }
+  if (!clientJoin || clientJoin.joinedWith.table !== "account_detail") {
+    throw new Error("client_account_profile должна быть соединена с account_detail по userSelectedParents");
+  }
+
+  // Проверяем buildHierarchyTree
+  const tree = buildHierarchyTree(branchPlan.fromTable, branchPlan.joinPlan, branchPlan.aliasMap);
+  if (!tree.root || tree.root.table.table !== "account_detail") {
+    throw new Error("buildHierarchyTree: корень дерева должен быть account_detail");
+  }
+  if (tree.root.children.length !== 2) {
+    throw new Error("buildHierarchyTree: у корня должно быть 2 потомка (card_detail и client_account_profile)");
+  }
+  if (tree.flatTreeList.length !== 3) {
+    throw new Error("buildHierarchyTree: в flatTreeList должно быть 3 узла");
   }
 
   console.log("✓ Чистый SELECT формируется без CTAS и без шапки");

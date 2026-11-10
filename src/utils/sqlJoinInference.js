@@ -253,7 +253,7 @@ export class SqlScriptMiningStrategy {
         const priorName = normalizeTableName(prior.table);
 
         const mentionsPrior = (priorAlias && new RegExp(`\\b${priorAlias}\\.`, "i").test(j.condition)) ||
-                              new RegExp(`\\b${priorName}\\.`, "i").test(j.condition);
+          new RegExp(`\\b${priorName}\\.`, "i").test(j.condition);
 
         if (mentionsPrior || allTablesInQuery.length === 2) {
           graph.addEdge(prior.table, j.joinedTable, {
@@ -641,7 +641,7 @@ export function adaptConditionAliases(edge, newLeftAlias, newRightAlias, extraAl
   if (extraAliasMap && edge.sourceAliasMap) {
     for (const [origAlias, rawTable] of Object.entries(edge.sourceAliasMap)) {
       if (origAlias.toLowerCase() === origLeftAlias?.toLowerCase() ||
-          origAlias.toLowerCase() === origRightAlias?.toLowerCase()) {
+        origAlias.toLowerCase() === origRightAlias?.toLowerCase()) {
         continue;
       }
       const tableNorm = normalizeTableName(rawTable);
@@ -668,7 +668,8 @@ export function buildJoinPlan(tables, options = {}) {
     catalogData,
     baseTableKey,
     defaultJoinType = "LEFT JOIN",
-    userSelectedSources = null
+    userSelectedSources = null,
+    userSelectedParents = null
   } = options;
 
   if (!tables || tables.length === 0) {
@@ -711,17 +712,33 @@ export function buildJoinPlan(tables, options = {}) {
       const candidate = remaining[i];
       const candidateKey = getTableKey(candidate);
       const userSelectedChoice = userSelectedSources?.[candidateKey] || null;
+      const userSelectedParentKey = userSelectedParents?.[candidateKey] ? userSelectedParents[candidateKey].toLowerCase() : null;
+
+      // Если пользователь выбрал родителя, который ещё не подключён, ждём подключения родителя
+      if (userSelectedParentKey) {
+        const parentIsConnected = connected.some(t => getTableKey(t) === userSelectedParentKey);
+        const parentIsInTables = tables.some(t => getTableKey(t) === userSelectedParentKey);
+        if (parentIsInTables && !parentIsConnected) {
+          continue;
+        }
+      }
 
       // Собираем все связи кандидата с любой из уже подключенных таблиц
       const candidateEdges = [];
 
       for (const target of connected) {
+        const targetKey = getTableKey(target);
+        // Если пользователь выбрал конкретного родителя для этой таблицы — рассматриваем только его
+        if (userSelectedParentKey && targetKey !== userSelectedParentKey) {
+          continue;
+        }
+
         const directEdges = knowledgeGraph.getDirectEdges(target, candidate) || [];
         for (const edge of directEdges) {
           // Исключаем временные таблицы и витрины (tmp_*) из кандидатов умного ранжирования
           if (isTemporaryTable(edge.sourceMart) ||
-              isTemporaryTable(edge.originalLeftTable) ||
-              isTemporaryTable(edge.originalRightTable)) {
+            isTemporaryTable(edge.originalLeftTable) ||
+            isTemporaryTable(edge.originalRightTable)) {
             continue;
           }
           candidateEdges.push({ edge, target });
@@ -732,6 +749,27 @@ export function buildJoinPlan(tables, options = {}) {
           if (keyMatch) {
             candidateEdges.push({ edge: keyMatch, target });
           }
+        }
+
+        // Если пользователь выбрал этот таргет родителем, но связей в графе нет — синтезируем связь по ключам
+        if (userSelectedParentKey && targetKey === userSelectedParentKey && candidateEdges.length === 0) {
+          const targetCols = getTableColumns(target, catalogData);
+          const candidateCols = getTableColumns(candidate, catalogData);
+          const matchCol = targetCols.find(tc => candidateCols.includes(tc) && (tc.endsWith("_id") || tc.endsWith("_rk") || tc.endsWith("_code")));
+          const cond = matchCol
+            ? `${target.table}.${matchCol} = ${candidate.table}.${matchCol}`
+            : `${target.table}.${target.table}_id = ${candidate.table}.${candidate.table}_id`;
+
+          candidateEdges.push({
+            edge: {
+              condition: cond,
+              strategy: "manual_parent",
+              confidence: 0.6,
+              sourceMart: null,
+              note: `Пользовательская привязка к ${target.table}`
+            },
+            target
+          });
         }
       }
 
@@ -762,6 +800,11 @@ export function buildJoinPlan(tables, options = {}) {
         item.id = sourceId;
         item.missingTables = missing;
         item.frequency = freq;
+
+        // Если пользователь выбрал этого родителя
+        if (userSelectedParentKey && getTableKey(item.target) === userSelectedParentKey) {
+          score += 5000;
+        }
 
         // Если пользователь явно выбрал этот источник в UI
         if (userSelectedChoice && (userSelectedChoice === sourceId || userSelectedChoice === item.edge.sourceMart)) {
@@ -848,6 +891,7 @@ export function buildJoinPlan(tables, options = {}) {
         alias: targetAlias,
         joinedWith: bestConnection.target,
         joinedWithAlias: parentAlias,
+        parentTableKey: getTableKey(bestConnection.target),
         joinType: effectiveJoinType,
         condition: adaptedCondition,
         sourceMart: bestConnection.edge.sourceMart || null,
@@ -857,8 +901,8 @@ export function buildJoinPlan(tables, options = {}) {
         availableSources: availableSources
       });
 
-      let expSource = bestConnection.edge.sourceMart 
-        ? `из скрипта ${bestConnection.edge.sourceMart}` 
+      let expSource = bestConnection.edge.sourceMart
+        ? `из скрипта ${bestConnection.edge.sourceMart}`
         : (bestConnection.edge.note || "автоматический подбор");
       if (bestConnection.missingTables && bestConnection.missingTables.length > 0) {
         expSource += ` (требует таблицы: ${bestConnection.missingTables.map(m => m.table).join(", ")})`;
@@ -886,6 +930,7 @@ export function buildJoinPlan(tables, options = {}) {
         alias: targetAlias,
         joinedWith: defaultParent,
         joinedWithAlias: defaultParentAlias,
+        parentTableKey: getTableKey(defaultParent),
         joinType: effectiveJoinType,
         condition: `/* TODO: укажите условие соединения с ${defaultParentAlias} (${defaultParent.table}) */`,
         sourceMart: null,
@@ -913,6 +958,83 @@ export function buildJoinPlan(tables, options = {}) {
     aliasMap,
     explanations
   };
+}
+
+/**
+ * Преобразует плоский joinPlan в древовидную иерархическую структуру (Join Tree).
+ * @param {object} fromTable - базовая таблица (FROM)
+ * @param {Array<object>} joinPlan - план соединений из buildJoinPlan
+ * @param {Map<string, string>} [aliasMap] - маппинг tableKey -> alias
+ * @returns {{ root: object, nodesByKey: Map<string, object>, flatTreeList: Array<object> }}
+ */
+export function buildHierarchyTree(fromTable, joinPlan, aliasMap = new Map()) {
+  if (!fromTable) {
+    return { root: null, nodesByKey: new Map(), flatTreeList: [] };
+  }
+
+  const nodesByKey = new Map();
+  const rootKey = getTableKey(fromTable);
+  const rootNode = {
+    key: rootKey,
+    table: fromTable,
+    alias: aliasMap.get(rootKey) || generateTableAlias(fromTable.table),
+    isBase: true,
+    parentKey: null,
+    joinInfo: null,
+    depth: 0,
+    children: []
+  };
+  nodesByKey.set(rootKey, rootNode);
+
+  // Создаем узлы для всех таблиц в плане
+  for (const item of (joinPlan || [])) {
+    const key = getTableKey(item.table);
+    const pKey = item.parentTableKey || (item.joinedWith ? getTableKey(item.joinedWith) : rootKey);
+    const node = {
+      key: key,
+      table: item.table,
+      alias: item.alias,
+      isBase: false,
+      parentKey: pKey,
+      joinInfo: item,
+      depth: 0,
+      children: []
+    };
+    nodesByKey.set(key, node);
+  }
+
+  // Связываем родителей и детей
+  for (const [key, node] of nodesByKey.entries()) {
+    if (node.isBase) continue;
+    let parent = nodesByKey.get(node.parentKey);
+    if (!parent) {
+      // Fallback на корень если родитель не найден
+      parent = rootNode;
+      node.parentKey = rootKey;
+    }
+    parent.children.push(node);
+  }
+
+  // Вычисляем depth и строим плоский обход в глубину (DFS pre-order)
+  const flatTreeList = [];
+  function traverse(node, depth, isLastChild = true, parentPrefix = "") {
+    node.depth = depth;
+    node.isLast = isLastChild;
+    node.prefix = parentPrefix + (node.isBase ? "" : (isLastChild ? "└── " : "├── "));
+    flatTreeList.push(node);
+
+    const childCount = node.children.length;
+    for (let i = 0; i < childCount; i++) {
+      const child = node.children[i];
+      const isLast = (i === childCount - 1);
+      const nextPrefix = node.isBase ? "" : (parentPrefix + (isLastChild ? "    " : "│   "));
+      traverse(child, depth + 1, isLast, nextPrefix);
+    }
+  }
+
+  traverse(rootNode, 0, true, "");
+
+  return { root: rootNode, nodesByKey, flatTreeList };
 }
 
 /**
@@ -1247,6 +1369,7 @@ export function generateSqlTemplate(tables, options = {}) {
     baseTableKey = null,
     defaultJoinType = "LEFT JOIN",
     userSelectedSources = null,
+    userSelectedParents = null,
     enableTimelineSlicing = false
   } = options;
 
@@ -1268,7 +1391,8 @@ export function generateSqlTemplate(tables, options = {}) {
     catalogData,
     baseTableKey,
     defaultJoinType,
-    userSelectedSources
+    userSelectedSources,
+    userSelectedParents
   });
 
   // Если включен режим Timeline Slicing и условия применимости соблюдены — генерируем хронологический шаблон
@@ -1301,7 +1425,7 @@ export function generateSqlTemplate(tables, options = {}) {
   // 3. Блоки JOIN с поддержкой внешних таблиц (ext_*)
   for (const j of joinPlan) {
     const fullTarget = formatTableReferenceForTarget(j.table, effectiveTargetDb);
-    const comment = j.sourceMart 
+    const comment = j.sourceMart
       ? `/* Связь из ${j.sourceMart} */`
       : (j.note ? `/* ${j.note} */` : "");
 

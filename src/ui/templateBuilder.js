@@ -6,8 +6,10 @@ ROLE: UI-компонент «Генератор шаблонов витрин»
 DESIGN: Полностью реактивное разделение State -> Render -> Actions для простого расширения.
 */
 
-import { generateSqlTemplate, buildJoinPlan, getTableKey, canApplyTimelineSlicing } from "../utils/sqlJoinInference.js";
+import { generateSqlTemplate, buildJoinPlan, buildHierarchyTree, getTableKey, canApplyTimelineSlicing } from "../utils/sqlJoinInference.js";
 import { copyText } from "../utils/helpers.js";
+import { renderTreeCards } from "./templateBuilderTreeCards.js";
+import { renderGraphView, drawGraphEdges } from "./templateBuilderGraphView.js";
 
 // ============================================================================
 // СОСТОЯНИЕ (State Store)
@@ -18,6 +20,8 @@ export const templateBuilderState = {
   selectedTables: [], // Array<{ db, schema, table, fullId }>
   baseTableKey: null, // tableKey главной таблицы (FROM)
   userSelectedSources: {}, // Map<tableKey, sourceId> - пользовательский выбор источника связи
+  userSelectedParents: {}, // Map<tableKey, parentTableKey> - пользовательский выбор родительской таблицы (ветвление JOIN)
+  viewMode: "tree", // "tree" (Вариант 1: Древовидный список) | "graph" (Вариант 2: Граф соединений)
   defaultJoinType: "LEFT JOIN",
   enableTimelineSlicing: false, // Режим нарезки временных интервалов SCD2
   generatedSql: "",
@@ -88,10 +92,18 @@ export function removeTableFromBuilder(tableKey) {
     t => getTableKey(t) !== normKey
   );
   delete templateBuilderState.userSelectedSources[normKey];
+  delete templateBuilderState.userSelectedParents[normKey];
+
+  // Если у других таблиц удаляемая таблица была родителем, удаляем привязку
+  for (const [k, p] of Object.entries(templateBuilderState.userSelectedParents)) {
+    if (p === normKey) {
+      delete templateBuilderState.userSelectedParents[k];
+    }
+  }
 
   if (templateBuilderState.baseTableKey === normKey) {
-    templateBuilderState.baseTableKey = templateBuilderState.selectedTables.length > 0 
-      ? getTableKey(templateBuilderState.selectedTables[0]) 
+    templateBuilderState.baseTableKey = templateBuilderState.selectedTables.length > 0
+      ? getTableKey(templateBuilderState.selectedTables[0])
       : null;
   }
 
@@ -135,12 +147,46 @@ export function setTableJoinSource(tableKey, sourceId) {
 }
 
 /**
+ * Устанавливает родительскую таблицу для ветвления JOIN (Join Tree).
+ * @param {string} tableKey 
+ * @param {string} parentKey 
+ */
+export function setTableParent(tableKey, parentKey) {
+  if (!tableKey) return;
+  const normKey = tableKey.toLowerCase();
+  const normParent = parentKey ? parentKey.toLowerCase() : null;
+
+  if (normParent) {
+    templateBuilderState.userSelectedParents[normKey] = normParent;
+  } else {
+    delete templateBuilderState.userSelectedParents[normKey];
+  }
+
+  if (templateBuilderState.generatedSql) {
+    generateTemplateSql();
+  } else {
+    templateBuilderState.notify();
+  }
+}
+
+/**
+ * Переключает режим отображения структуры соединений (tree: Древовидный список | graph: Граф связей).
+ * @param {string} mode - "tree" | "graph"
+ */
+export function setTemplateViewMode(mode) {
+  if (mode !== "tree" && mode !== "graph") return;
+  templateBuilderState.viewMode = mode;
+  templateBuilderState.notify();
+}
+
+/**
  * Очищает список добавленных таблиц.
  */
 export function clearBuilderTables() {
   templateBuilderState.selectedTables = [];
   templateBuilderState.baseTableKey = null;
   templateBuilderState.userSelectedSources = {};
+  templateBuilderState.userSelectedParents = {};
   templateBuilderState.enableTimelineSlicing = false;
   templateBuilderState.generatedSql = "";
   templateBuilderState.notify();
@@ -228,6 +274,7 @@ export function generateTemplateSql() {
     baseTableKey: templateBuilderState.baseTableKey,
     defaultJoinType: templateBuilderState.defaultJoinType,
     userSelectedSources: templateBuilderState.userSelectedSources,
+    userSelectedParents: templateBuilderState.userSelectedParents,
     enableTimelineSlicing: templateBuilderState.enableTimelineSlicing
   });
 
@@ -419,104 +466,71 @@ function renderTableList(container) {
     return;
   }
 
-  // Строим текущий план соединения, чтобы сразу показать доступные связи и зависимости
-  const plan = tables.length >= 2 ? buildJoinPlan(tables, {
-    catalogData: window.catalogData || null,
-    baseTableKey: templateBuilderState.baseTableKey,
-    defaultJoinType: templateBuilderState.defaultJoinType,
-    userSelectedSources: templateBuilderState.userSelectedSources
-  }) : null;
-
-  let html = `<div class="tb-tables-grid">`;
-  tables.forEach((t) => {
-    const key = getTableKey(t);
-    const isBase = key === templateBuilderState.baseTableKey;
-    const layer = (t.db || "dds").toLowerCase();
-    const planItem = !isBase ? plan?.joinPlan?.find(j => getTableKey(j.table) === key) : null;
-    const sources = planItem?.availableSources || [];
-    const missingTables = planItem?.missingTables || [];
-
-    html += `
-      <div class="tb-table-card ${isBase ? 'tb-table-card--base' : ''}" data-key="${key}">
-        <div class="tb-table-card-main">
-          <div class="tb-table-card-left">
-            <span class="tb-layer-badge tb-layer-badge--${layer}">${layer.toUpperCase()}</span>
-            <div class="tb-table-name-group">
-              <span class="tb-table-schema">${t.schema}</span>
-              <span class="tb-table-name" title="${t.table}">${t.table}</span>
-            </div>
-          </div>
-          <div class="tb-table-card-right">
-            <button type="button" class="tb-btn-base ${isBase ? 'active' : ''}" 
-                    onclick="window.setTemplateBaseTable('${key}')" 
-                    title="${isBase ? 'Базовая таблица (FROM)' : 'Сделать базовой таблицей (FROM)'}">
-              ${isBase ? '★ FROM' : 'Сделать FROM'}
-            </button>
-            <button type="button" class="tb-btn-remove" 
-                    onclick="window.removeTableFromTemplateBuilder('${key}')" 
-                    title="Удалить из шаблона">
-              ✕
-            </button>
-          </div>
-        </div>
-    `;
-
-    if (!isBase && planItem) {
-      html += `<div class="tb-table-card-details">`;
-
-      if (sources.length > 0) {
-        html += `
-          <div class="tb-join-source-row">
-            <label class="tb-join-source-label" title="Источник скрипта и условие JOIN">Связь:</label>
-            <select class="tb-join-source-select" onchange="window.setTableJoinSource('${key}', this.value)">
-              ${sources.map(s => {
-                const optTitle = escapeHtml(s.rawCondition || s.label);
-                const optText = `${s.isDefault ? '★ ' : ''}${escapeHtml(s.label)} [${escapeHtml(s.statusTag)}]`;
-                return `<option value="${escapeHtml(s.id)}" ${s.isSelected ? 'selected' : ''} title="${optTitle}">${optText}</option>`;
-              }).join("")}
-            </select>
-          </div>
-        `;
-      } else {
-        html += `
-          <div class="tb-join-fallback-hint">
-            <span>Прямая связь в витринах не найдена (TODO условие)</span>
-          </div>
-        `;
-      }
-
-      if (missingTables.length > 0) {
-        html += `
-          <div class="tb-missing-table-banner">
-            <div class="tb-missing-header">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                <line x1="12" y1="9" x2="12" y2="13"></line>
-                <line x1="12" y1="17" x2="12.01" y2="17"></line>
-              </svg>
-              <span>В условии используется таблица не из шаблона:</span>
-            </div>
-            <div class="tb-missing-list">
-              ${missingTables.map(m => `
-                <div class="tb-missing-item">
-                  <span class="tb-missing-name"><strong>${escapeHtml(m.table)}</strong> <code class="tb-missing-alias">${escapeHtml(m.alias)}.</code></span>
-                  <button type="button" class="tb-btn-add-missing" onclick="window.addMissingTable('${escapeHtml(m.db)}', '${escapeHtml(m.schema)}', '${escapeHtml(m.table)}')" title="Добавить ${escapeHtml(m.db)}.${escapeHtml(m.schema)}.${escapeHtml(m.table)} в шаблон">
-                    + Добавить в шаблон
-                  </button>
-                </div>
-              `).join("")}
-            </div>
-          </div>
-        `;
-      }
-
-      html += `</div>`;
-    }
-
-    html += `</div>`;
+    // Строим текущий план соединения и иерархическое дерево
+    const plan = buildJoinPlan(tables, {
+      catalogData: window.catalogData || null,
+      baseTableKey: templateBuilderState.baseTableKey,
+      defaultJoinType: templateBuilderState.defaultJoinType,
+    userSelectedSources: templateBuilderState.userSelectedSources,
+    userSelectedParents: templateBuilderState.userSelectedParents
   });
-  html += `</div>`;
-  container.innerHTML = html;
+
+    const tree = buildHierarchyTree(plan.fromTable, plan.joinPlan, plan.aliasMap);
+    const viewMode = templateBuilderState.viewMode || "tree";
+
+    // Рендерим панель переключения режима и контейнер для содержимого
+    container.innerHTML = `
+    <div class="tb-view-mode-bar">
+      <span class="tb-view-mode-title">Вид структуры:</span>
+      <div class="tb-view-mode-toggle" role="radiogroup" aria-label="Вид структуры соединений">
+        <label class="tb-view-mode-pill ${viewMode === 'tree' ? 'active' : ''}" title="Вариант 1: Иерархический список карточек с отступами и ветвлением">
+          <input type="radio" name="tb-view-mode" value="tree" ${viewMode === 'tree' ? 'checked' : ''} onchange="window.setTemplateViewMode('tree')">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+          <span>Древовидный список</span>
+        </label>
+        <label class="tb-view-mode-pill ${viewMode === 'graph' ? 'active' : ''}" title="Вариант 2: Интерактивный граф-диаграмма связей по эскизу">
+          <input type="radio" name="tb-view-mode" value="graph" ${viewMode === 'graph' ? 'checked' : ''} onchange="window.setTemplateViewMode('graph')">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="3" width="6" height="4" rx="1"></rect>
+            <rect x="2" y="17" width="6" height="4" rx="1"></rect>
+            <rect x="16" y="17" width="6" height="4" rx="1"></rect>
+            <path d="M12 7v4M5 17v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span>Граф связей (схема)</span>
+        </label>
+      </div>
+    </div>
+    <div id="tb-view-content" class="tb-view-content"></div>
+  `;
+
+      const viewContent = container.querySelector("#tb-view-content");
+      if (!viewContent) return;
+
+      const callbacks = {
+        tables,
+        plan,
+        tree,
+        state: templateBuilderState,
+        onSetParent: (childKey, parentKey) => setTableParent(childKey, parentKey),
+        onSetSource: (tblKey, srcId) => setTableJoinSource(tblKey, srcId),
+        onSetBase: (tblKey) => setBaseTable(tblKey),
+        onRemove: (tblKey) => removeTableFromBuilder(tblKey),
+        onAddMissing: (db, schema, table) => addTableToBuilder({ db, schema, table })
+      };
+
+  // Делегируем отрисовку соответствующему изолированному модулю
+  if (viewMode === "graph") {
+    renderGraphView(viewContent, callbacks);
+  } else {
+    renderTreeCards(viewContent, callbacks);
+  }
 }
 
 function renderOutput(container) {
@@ -731,6 +745,20 @@ export function initTemplateBuilder() {
   window.addEventListener("resize", () => {
     if (templateBuilderState.isOpen) {
       syncTemplateBuilderPosition();
+      if (templateBuilderState.viewMode === "graph") {
+        const viewContent = document.getElementById("tb-view-content");
+        if (viewContent) {
+          const plan = buildJoinPlan(templateBuilderState.selectedTables, {
+            catalogData: window.catalogData || null,
+            baseTableKey: templateBuilderState.baseTableKey,
+            defaultJoinType: templateBuilderState.defaultJoinType,
+            userSelectedSources: templateBuilderState.userSelectedSources,
+            userSelectedParents: templateBuilderState.userSelectedParents
+          });
+          const tree = buildHierarchyTree(plan.fromTable, plan.joinPlan, plan.aliasMap);
+          drawGraphEdges(viewContent, tree);
+        }
+      }
     }
   });
 
@@ -769,7 +797,7 @@ export function initTemplateBuilder() {
     // так и геометрически по координатам левой панели (на случай динамических элементов или скроллбара)
     const sidebar = document.getElementById("sidebar");
     if (e.target.closest("#sidebar") || e.target.closest("#sidebarToggleBtn") || e.target.closest("#resizer") ||
-        (mouseDownTarget && (mouseDownTarget.closest("#sidebar") || mouseDownTarget.closest("#sidebarToggleBtn") || mouseDownTarget.closest("#resizer")))) {
+      (mouseDownTarget && (mouseDownTarget.closest("#sidebar") || mouseDownTarget.closest("#sidebarToggleBtn") || mouseDownTarget.closest("#resizer")))) {
       return;
     }
     if (sidebar) {
@@ -796,13 +824,15 @@ window.setTemplateBaseTable = setBaseTable;
 window.removeTableFromTemplateBuilder = removeTableFromBuilder;
 window.clearBuilderTables = clearBuilderTables;
 window.setTableJoinSource = setTableJoinSource;
-window.addMissingTable = function(db, schema, table) {
+window.setTemplateTableParent = setTableParent;
+window.setTemplateViewMode = setTemplateViewMode;
+window.addMissingTable = function (db, schema, table) {
   addTableToBuilder({ db, schema, table });
 };
 window.generateTemplateSql = generateTemplateSql;
 window.openTimelineSlicingHelpModal = openTimelineSlicingHelpModal;
 window.closeTimelineSlicingHelpModal = closeTimelineSlicingHelpModal;
-window.copyTemplateSql = function(btn) {
+window.copyTemplateSql = function (btn) {
   const sql = templateBuilderState.generatedSql;
   if (!sql) return;
   copyText(sql, btn);

@@ -7437,5 +7437,464 @@ body.tb-dragging-active {
     box-shadow: 0 2px 8px rgba(0, 85, 255, 0.3);
 }
 
+/* ============================================================================ */
+/* ПЕРЕКЛЮЧАТЕЛЬ РЕЖИМА ОТОБРАЖЕНИЯ (Tree Cards vs Graph View)                  */
+/* ============================================================================ */
+
+.tb-view-mode-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.tb-view-mode-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-gray);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.tb-view-mode-toggle {
+    display: inline-flex;
+    background: #e2e8f0;
+    padding: 3px;
+    border-radius: 7px;
+    gap: 2px;
+}
+
+.tb-view-mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-gray);
+    border-radius: 5px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s ease;
+}
+
+.tb-view-mode-pill input[type="radio"] {
+    display: none;
+}
+
+.tb-view-mode-pill svg {
+    stroke: currentColor;
+    flex-shrink: 0;
+}
+
+.tb-view-mode-pill:hover {
+    color: var(--text-dark);
+}
+
+.tb-view-mode-pill.active {
+    background: var(--white);
+    color: var(--accent-blue);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.tb-view-mode-pill.active svg {
+    stroke: var(--accent-blue);
+}
+
+.tb-alias-pill {
+    font-size: 10.5px;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-weight: 600;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+/* Общий селектор выбора родителя («Соединить с») */
+.tb-join-parent-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #e2e8f0;
+}
+
+.tb-join-parent-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #0f766e;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.tb-join-parent-label svg {
+    stroke: #0f766e;
+}
+
+.tb-parent-select {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    font-size: 11.5px;
+    font-weight: 500;
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: #0f766e;
+    background: #f0fdfa;
+    border: 1px solid #99f6e4;
+    border-radius: 5px;
+    padding: 0 8px;
+    outline: none;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.tb-parent-select:hover, .tb-parent-select:focus {
+    border-color: #14b8a6;
+    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.15);
+}
+
+/* ============================================================================ */
+/* VARIANT 1: TREE CARDS STYLES (src/ui/templateBuilderTreeCards.js)           */
+/* Если будет решено оставить только Вариант 2, этот блок можно легко удалить  */
+/* ============================================================================ */
+
+.tb-tree-cards-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tb-tree-header-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f0fdfa;
+    border: 1px solid #ccfbf1;
+    border-radius: 6px;
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: #0f766e;
+}
+
+.tb-tree-header-hint svg {
+    stroke: #0f766e;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.tb-tree-cards-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tb-tree-node {
+    display: flex;
+    align-items: stretch;
+    position: relative;
+    transition: margin-left 0.2s ease;
+}
+
+.tb-tree-node--child {
+    position: relative;
+}
+
+.tb-tree-branch-guide {
+    display: flex;
+    align-items: center;
+    position: absolute;
+    left: -22px;
+    top: 0;
+    bottom: 0;
+    width: 22px;
+    pointer-events: none;
+}
+
+.tb-tree-branch-line {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: #94a3b8;
+    line-height: 1;
+    user-select: none;
+}
+
+.tb-tree-node .tb-table-card {
+    flex: 1;
+    margin-bottom: 0;
+}
+
+/* ============================================================================ */
+/* VARIANT 2: GRAPH VIEW STYLES (src/ui/templateBuilderGraphView.js)           */
+/* Если будет решено оставить только Вариант 1, этот блок можно легко удалить  */
+/* ============================================================================ */
+
+.tb-graph-view-container {
+    display: flex;
+    flex-direction: column;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.tb-graph-header-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #eff6ff;
+    border-bottom: 1px solid #dbeafe;
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: #1e40af;
+}
+
+.tb-graph-header-hint svg {
+    stroke: #2563eb;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.tb-graph-viewport {
+    position: relative;
+    overflow: auto;
+    min-height: 320px;
+    max-height: 520px;
+    padding: 28px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+    background-size: 20px 20px;
+    background-position: -10px -10px;
+}
+
+.tb-graph-svg-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.tb-graph-edge-path {
+    stroke: #1a73e8;
+    stroke-width: 2.2px;
+    fill: none;
+    transition: d 0.2s ease;
+}
+
+.tb-graph-tree-root {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+.tb-graph-branch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+}
+
+.tb-graph-node-wrapper {
+    margin-bottom: 36px;
+    display: flex;
+    justify-content: center;
+}
+
+.tb-graph-children {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    gap: 28px;
+    flex-wrap: wrap;
+    position: relative;
+    width: 100%;
+}
+
+.tb-graph-card {
+    width: 250px;
+    background: var(--white);
+    border: 1.5px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    position: relative;
+    transition: all 0.15s ease;
+}
+
+.tb-graph-card:hover {
+    border-color: var(--accent-blue);
+    box-shadow: 0 4px 12px rgba(0, 85, 255, 0.15);
+}
+
+.tb-graph-card--base {
+    border: 2px solid var(--accent-blue);
+    box-shadow: 0 3px 10px rgba(0, 85, 255, 0.18);
+}
+
+.tb-graph-port {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    border: 2px solid var(--white);
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3;
+    box-shadow: 0 0 0 1px #94a3b8;
+}
+
+.tb-graph-port--top {
+    top: -6px;
+}
+
+.tb-graph-port--bottom {
+    bottom: -6px;
+}
+
+.tb-graph-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    gap: 6px;
+}
+
+.tb-graph-card-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.tb-graph-schema {
+    font-size: 10px;
+    color: var(--text-gray);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.tb-graph-table {
+    font-size: 12px;
+    color: var(--text-dark);
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tb-graph-card-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.tb-graph-card-body {
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: #fafafa;
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+.tb-graph-parent-row,
+.tb-graph-source-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tb-graph-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text-gray);
+    white-space: nowrap;
+    width: 65px;
+    flex-shrink: 0;
+}
+
+.tb-graph-parent-select,
+.tb-graph-source-select {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 4px;
+    background: var(--white);
+    color: var(--text-dark);
+    outline: none;
+    cursor: pointer;
+}
+
+.tb-graph-parent-select {
+    color: #0f766e;
+    background: #f0fdfa;
+    border-color: #99f6e4;
+    font-weight: 500;
+}
+
+.tb-graph-fallback-hint {
+    font-size: 10.5px;
+    color: #b45309;
+    font-style: italic;
+    padding: 2px 0;
+}
+
+.tb-graph-missing-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 6px;
+    background: #fffbeb;
+    border: 1px solid #fef3c7;
+    border-radius: 4px;
+}
+
+.tb-graph-missing-tag {
+    font-size: 10px;
+    font-weight: 600;
+    color: #b45309;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tb-btn-add-missing--compact {
+    font-size: 9.5px;
+    padding: 1px 6px;
+}
+
+
 
 
