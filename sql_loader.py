@@ -69,6 +69,17 @@ _EXTENSION_STMT_REGEX = re.compile(
     re.IGNORECASE
 )
 
+# Анонимные PL/pgSQL-блоки DO $...$ (не являются трансформациями таблиц для lineage)
+_IS_PURE_DO_BLOCK_REGEX = re.compile(
+    r'^(?:--[^\r\n]*|/\*[\s\S]*?\*/|\s)*DO\b(?:\s+LANGUAGE\s+\w+)?\s*(\$[A-Za-z0-9_]*\$).*?\1(?:\s+LANGUAGE\s+\w+)?\s*;?(?:--[^\r\n]*|/\*[\s\S]*?\*/|\s)*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+_DO_BLOCK_STMT_REGEX = re.compile(
+    r'(?:^|(?<=;))(?:--[^\r\n]*|/\*[\s\S]*?\*/|\s)*DO\b(?:\s+LANGUAGE\s+\w+)?\s*(\$[A-Za-z0-9_]*\$).*?\1(?:\s+LANGUAGE\s+\w+)?\s*;?',
+    re.IGNORECASE | re.DOTALL
+)
+
 
 def _normalize_foreign_tables(sql: str, db_name: str = "") -> str:
     """
@@ -163,13 +174,18 @@ def load_sql_transformations(config: dict) -> list[dict]:
                 target_table  = row[1]
                 raw_query     = row[2] or ""
                 updated_at    = row[3]
-                # Пропускаем чисто системные команды (CREATE/DROP EXTENSION), не создающие таблицы DWH
-                if _IS_PURE_EXTENSION_REGEX.match(raw_query):
+                # Пропускаем чисто системные команды (CREATE/DROP EXTENSION) и PL/pgSQL блоки DO $...$
+                if _IS_PURE_EXTENSION_REGEX.match(raw_query) or _IS_PURE_DO_BLOCK_REGEX.match(raw_query):
                     continue
                 query         = _normalize_foreign_tables(raw_query, db_name)
                 # Если в комплексном скрипте есть преамбула EXTENSION, отсекаем её из query для lineage
                 if "EXTENSION" in query.upper():
                     query = _EXTENSION_STMT_REGEX.sub(';', query).strip(' ;\n\r\t')
+                    if not query:
+                        continue
+                # Если в комплексном скрипте есть PL/pgSQL блок DO $...$, отсекаем его из query для lineage
+                if re.search(r'\bDO\b', query, re.IGNORECASE):
+                    query = _DO_BLOCK_STMT_REGEX.sub('', query).strip(' ;\n\r\t')
                     if not query:
                         continue
                 results.append({
