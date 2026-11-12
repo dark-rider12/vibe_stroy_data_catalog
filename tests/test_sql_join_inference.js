@@ -276,20 +276,35 @@ function runTest() {
   if (!timelineSql.includes("timeline_intervals AS (") || !timelineSql.includes("LEAD(change_dt) OVER")) {
     throw new Error("В режиме Timeline Slicing должна выполняться нарезка интервалов через LEAD(change_dt)");
   }
+  if (!timelineSql.includes("FROM timeline_events") || timelineSql.includes("SELECT DISTINCT")) {
+    throw new Error("В timeline_intervals не должно быть лишнего подзапроса SELECT DISTINCT, чтение идет прямо из timeline_events");
+  }
   if (!timelineSql.includes("clean_intervals AS (") || !timelineSql.includes("valid_from < valid_to")) {
     throw new Error("В режиме Timeline Slicing должен генерироваться CTE clean_intervals с отсечением пустых интервалов");
   }
   if (!timelineSql.includes("FROM clean_intervals i")) {
     throw new Error("Главный SELECT должен строиться от clean_intervals i");
   }
-  if (!timelineSql.includes("WHEN i.valid_to >= '9999-12-31'::timestamp THEN true")) {
-    throw new Error("Поле is_active должно вычисляться как true только для интервалов с датой 9999");
+  if (!timelineSql.includes("(i.valid_to >= '9999-12-31 23:59:59.999'::timestamp) AS is_active")) {
+    throw new Error("Поле is_active должно вычисляться лаконично через булево выражение с датой 9999-12-31 23:59:59.999");
   }
   if (!timelineSql.includes("i.valid_from >= dc.dwh_start_date") || !timelineSql.includes("i.valid_from <  dc.dwh_end_date")) {
     throw new Error("Джойны таблиц должны содержать фильтр попадания в интервал valid_from");
   }
-  if (!timelineSql.includes("i.valid_from AS dwh_start_date") || !timelineSql.includes("i.valid_to   AS dwh_end_date")) {
-    throw new Error("Результирующие поля dwh_start_date и dwh_end_date должны браться из valid_from и valid_to");
+  if (!timelineSql.includes("i.valid_from AS dwh_start_date, -- Дата начала действия записи") || !timelineSql.includes("i.valid_to   AS dwh_end_date,   -- Дата окончания действия записи")) {
+    throw new Error("Результирующие поля dwh_start_date и dwh_end_date должны содержать канонические комментарии");
+  }
+  if (!timelineSql.includes("i.client_id,")) {
+    throw new Error("Мастер-ключ client_id должен выбираться из таблицы интервалов i.client_id");
+  }
+  if (timelineSql.includes("dc.client_id,")) {
+    throw new Error("Мастер-ключ client_id не должен дублироваться как dc.client_id");
+  }
+  if (!timelineSql.includes("COALESCE(dc.source_system_id, da.source_system_id) AS source_system_id")) {
+    throw new Error("source_system_id должен оборачиваться в COALESCE по всем таблицам");
+  }
+  if (!timelineSql.includes("WHERE (dc.dwh_start_date IS NOT NULL") || !timelineSql.includes("da.dwh_start_date IS NOT NULL)")) {
+    throw new Error("Скрипт Timeline Slicing должен содержать WHERE-фильтр отсечения пустых интервалов по dwh_start_date");
   }
 
   // 10. Тест ветвления соединений (userSelectedParents) и построения Join Tree (buildHierarchyTree)

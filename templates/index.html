@@ -310,7 +310,7 @@
                     <div class="tb-step-card">
                         <div class="tb-step-card-num">Шаг 2</div>
                         <div class="tb-step-card-title"><code>timeline_intervals</code></div>
-                        <div class="tb-step-card-desc">Оконной функцией <code>LEAD(change_dt) OVER (...)</code> формирует непрерывные смежные интервалы.</div>
+                        <div class="tb-step-card-desc">Оконной функцией <code>LEAD(change_dt) OVER (...)</code> формирует непрерывные смежные интервалы напрямую из <code>timeline_events</code>.</div>
                     </div>
                     <div class="tb-step-card">
                         <div class="tb-step-card-num">Шаг 3</div>
@@ -329,13 +329,21 @@
             <div class="tb-help-section">
                 <div class="tb-help-section-title">
                     <span class="tb-help-step-pill">4</span>
-                    <span>Расчёт технических полей измерения</span>
+                    <span>Ключ сущности и технические поля</span>
                 </div>
                 <table class="tb-help-fields-table">
                     <tbody>
                         <tr>
+                            <td><code>client_id</code> (ключ)</td>
+                            <td><code>i.client_id</code> — берётся из ведущей таблицы интервалов (гарантированно <code>NOT NULL</code>, даже если клиент зарегистрирован позже открытия счёта).</td>
+                        </tr>
+                        <tr>
+                            <td><code>source_system_id</code></td>
+                            <td><code>COALESCE(t1.source_system_id, t2.source_system_id)</code> — безопасное извлечение системы-источника без потерь.</td>
+                        </tr>
+                        <tr>
                             <td><code>is_active</code></td>
-                            <td><code>CASE WHEN i.valid_to &gt;= '9999-12-31'::timestamp THEN true ELSE false END</code> — строго одна актуальная запись на сущность.</td>
+                            <td><code>(i.valid_to &gt;= '9999-12-31 23:59:59.999'::timestamp)</code> — прямое булево вычисление актуальности с миллисекундами (строго одна актуальная запись на сущность).</td>
                         </tr>
                         <tr>
                             <td><code>is_deleted</code></td>
@@ -343,14 +351,28 @@
                         </tr>
                         <tr>
                             <td><code>dwh_start_date</code><br><code>dwh_end_date</code></td>
-                            <td>Новые точные границы среза из временной шкалы (<code>i.valid_from</code> и <code>i.valid_to</code>).</td>
+                            <td>Новые точные границы среза из временной шкалы:<br><code>i.valid_from AS dwh_start_date, -- Дата начала действия записи</code><br><code>i.valid_to AS dwh_end_date, -- Дата окончания действия записи</code></td>
                         </tr>
                         <tr>
                             <td><code>etl_process_id</code></td>
                             <td>Сгенерированный детерминированный технический UUID (<code>uuid_generate_v5(...)</code>).</td>
                         </tr>
+                        <tr>
+                            <td><code>WHERE</code> (фильтр)</td>
+                            <td><code>WHERE (t1.dwh_start_date IS NOT NULL OR t2.dwh_start_date IS NOT NULL)</code> — автоматически вырезает «дырки» и периоды пауз, когда не действовала ни одна из таблиц.</td>
+                        </tr>
                     </tbody>
                 </table>
+                <div class="tb-help-tip-box" style="margin-top: 12px; padding: 10px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 6px; font-size: 11.5px; line-height: 1.45; color: #1e40af; display: flex; flex-direction: column; gap: 8px;">
+                    <div>
+                        <strong>💡 Почему бизнес-ключ берётся из <code>i.client_id</code>, а не из <code>c.client_id</code>?</strong><br>
+                        Если счёт был открыт раньше появления записи о клиенте (или при рассинхронизации источников), <code>LEFT JOIN</code> по клиенту вернёт <code>NULL</code>. Выборка <code>i.client_id</code> гарантирует, что первичный ключ витрины никогда не станет <code>NULL</code>.
+                    </div>
+                    <div>
+                        <strong>💡 Зачем нужен фильтр <code>WHERE (...dwh_start_date IS NOT NULL)</code>?</strong><br>
+                        Если между закрытием одной версии и открытием другой был перерыв (пауза в истории обеих таблиц), <code>LEAD</code> создаст пустой интервал. Фильтр <code>WHERE</code> автоматически отсекает такие строки-пустышки, сохраняя только те интервалы, где была активна хотя бы одна сущность.
+                    </div>
+                </div>
             </div>
         </div>
 

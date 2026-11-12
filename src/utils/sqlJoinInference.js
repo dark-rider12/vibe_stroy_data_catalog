@@ -1263,10 +1263,7 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
   lines.push(`        ${partitionCols},`);
   lines.push("        change_dt AS valid_from,");
   lines.push(`        LEAD(change_dt) OVER (PARTITION BY ${partitionCols} ORDER BY change_dt) AS valid_to`);
-  lines.push("    FROM (");
-  lines.push(`        SELECT DISTINCT ${partitionCols}, change_dt`);
-  lines.push("        FROM timeline_events");
-  lines.push("    ) t");
+  lines.push("    FROM timeline_events");
   lines.push("),");
   lines.push("");
 
@@ -1283,38 +1280,45 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
   lines.push("SELECT");
   const selectParts = [];
 
-  // Бизнес-поля базовой таблицы (без технических SCD полей)
-  const fromCols = getTableColumns(fromTable, catalogData).filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()));
+  const keyColSet = new Set(fromKeyCols.map(k => k.toLowerCase()));
+
+  // 4.1. Ключевые поля сущности (берутся из ведущей таблицы интервалов i — гарантированно NOT NULL)
+  selectParts.push("    -- Мастер-ключ сущности (из таблицы интервалов i, гарантированно NOT NULL):");
+  fromKeyCols.forEach(k => selectParts.push(`    i.${k},`));
+  selectParts.push("");
+
+  // 4.2. Бизнес-поля базовой таблицы (без технических SCD полей и ключевых полей)
+  const fromCols = getTableColumns(fromTable, catalogData)
+    .filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()) && !keyColSet.has(c.toLowerCase()));
   if (fromCols.length > 0) {
     fromCols.forEach(c => selectParts.push(`    ${fromAlias}.${c},`));
-  } else {
+  } else if (getTableColumns(fromTable, catalogData).length === 0) {
     selectParts.push(`    ${fromAlias}.*,`);
   }
 
-  // Бизнес-поля присоединенных таблиц
+  // 4.3. Бизнес-поля присоединенных таблиц
   for (const j of joinPlan) {
-    const jCols = getTableColumns(j.table, catalogData).filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()));
+    const jCols = getTableColumns(j.table, catalogData)
+      .filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()) && !keyColSet.has(c.toLowerCase()));
     if (jCols.length > 0) {
       jCols.forEach(c => selectParts.push(`    ${j.alias}.${c},`));
-    } else {
+    } else if (getTableColumns(j.table, catalogData).length === 0) {
       selectParts.push(`    ${j.alias}.*,`);
     }
   }
 
-  // Технические поля результирующего измерения
+  // 4.4. Технические поля результирующего измерения
   selectParts.push("");
   selectParts.push("    -- Технические поля результирующего измерения (SCD Type 2):");
-  selectParts.push(`    ${fromAlias}.source_system_id,`);
-  selectParts.push("    CASE");
-  selectParts.push("        WHEN i.valid_to >= '9999-12-31'::timestamp THEN true");
-  selectParts.push("        ELSE false");
-  selectParts.push("    END AS is_active,");
-
   const allAliases = [fromAlias, ...joinPlan.map(j => j.alias)];
+  const sourceSysExpr = allAliases.map(a => `${a}.source_system_id`).join(", ");
+  selectParts.push(`    COALESCE(${sourceSysExpr}) AS source_system_id,`);
+  selectParts.push("    (i.valid_to >= '9999-12-31 23:59:59.999'::timestamp) AS is_active,");
+
   const isDeletedExpr = allAliases.map(a => `COALESCE(${a}.is_deleted, false)`).join(" OR ");
   selectParts.push(`    (${isDeletedExpr}) AS is_deleted,`);
-  selectParts.push("    i.valid_from AS dwh_start_date,");
-  selectParts.push("    i.valid_to   AS dwh_end_date,");
+  selectParts.push("    i.valid_from AS dwh_start_date, -- Дата начала действия записи");
+  selectParts.push("    i.valid_to   AS dwh_end_date,   -- Дата окончания действия записи");
   selectParts.push("    uuid_generate_v5(uuid_nil(), 1::text) AS etl_process_id");
 
   lines.push(selectParts.join("\n"));
@@ -1339,6 +1343,10 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
     lines.push(`   AND i.valid_from >= ${j.alias}.dwh_start_date`);
     lines.push(`   AND i.valid_from <  ${j.alias}.dwh_end_date`);
   }
+
+  // 6. Фильтр отсечения пустых интервалов-призраков (где не было ни одной активной записи)
+  const ghostFilter = allAliases.map(a => `${a}.dwh_start_date IS NOT NULL`).join("\n   OR ");
+  lines.push(`WHERE (${ghostFilter})`);
 
   lines.push(";");
 
