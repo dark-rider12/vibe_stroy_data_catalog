@@ -174,10 +174,6 @@ body {
     gap: 8px;
 }
 
-.sidebar-header h2 {
-    flex-grow: 1;
-}
-
 /* Логотип приложения в шапке sidebar */
 .sidebar-logo {
     max-width: 170px;
@@ -232,7 +228,7 @@ body {
     align-items: center;
     justify-content: center;
     transition: left 0.3s ease, background 0.2s, transform 0.2s;
-    z-index: 30;
+    z-index: 600;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     opacity: 1;
     pointer-events: all;
@@ -645,12 +641,23 @@ details[open]>summary::before {
     gap: 20px;
     z-index: 10;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
-    transition: padding 0.2s ease;
+    transition: padding 0.3s ease;
 }
 
 .search-header.compressed {
     padding: 8px 24px;
     transition: none !important;
+}
+
+/* При свёрнутом сайдбаре сдвигаем элементы шапки правее кнопки разворачивания (left: 20px, width: 36px) */
+.sidebar.collapsed ~ .content .search-header,
+body.sidebar-collapsed .search-header {
+    padding-left: 76px;
+}
+
+.sidebar.collapsed ~ .content .search-header.compressed,
+body.sidebar-collapsed .search-header.compressed {
+    padding-left: 76px;
 }
 
 .search-header.compressed .search-box {
@@ -6261,7 +6268,7 @@ body.tb-dragging-active #sidebar {
     display: flex;
     flex-direction: column;
     transform: translateX(100%);
-    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), left 0.3s ease;
     box-shadow: -4px 0 20px rgba(15, 23, 42, 0.08);
     border-left: 1px solid var(--border);
 }
@@ -6289,6 +6296,13 @@ body.tb-dragging-active #sidebar {
     align-items: center;
     justify-content: space-between;
     flex-shrink: 0;
+    transition: padding 0.3s ease;
+}
+
+/* При свёрнутом сайдбаре сдвигаем заголовок шторки правее кнопки разворачивания (left: 20px, width: 36px) */
+.sidebar.collapsed ~ #template-builder-drawer .tb-drawer-header,
+body.sidebar-collapsed .tb-drawer-header {
+    padding-left: 76px;
 }
 
 .tb-drawer-title-group {
