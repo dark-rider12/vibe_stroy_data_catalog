@@ -312,13 +312,13 @@
             </div>
             {% if not (dp.has_unique_index and dp.has_unique_constraint) %}
             <div class="dq-code-box" id="dq-dup-script-{{ unique_id }}">
-                <pre><code>CREATE UNIQUE INDEX {{ dp.table_name }}_idx
-ON {{ dp.db_name }}.{{ dp.schema_name }}.{{ dp.table_name }} ({{ dp.first_col_name }})
+                <pre><code>CREATE UNIQUE INDEX {{ dp.index_name or (dp.table_name ~ '_idx') }}
+ON {{ dp.db_name }}.{{ dp.schema_name }}.{{ dp.table_name }} ({{ dp.cols_str or dp.first_col_name }})
 WHERE is_active = true;
 
 ALTER TABLE {{ dp.db_name }}.{{ dp.schema_name }}.{{ dp.table_name }}
-ADD CONSTRAINT {{ dp.table_name }}_unique_version
-UNIQUE ({{ dp.first_col_name }}, dwh_start_date);</code></pre>
+ADD CONSTRAINT {{ dp.constraint_name or (dp.table_name ~ '_unique_version') }}
+UNIQUE ({{ dp.cols_str or dp.first_col_name }}, dwh_start_date);</code></pre>
             </div>
             <div class="dq-actions">
                 <button class="dq-copy-btn" onclick="copyDqScript('dq-dup-script-{{ unique_id }}', this)">

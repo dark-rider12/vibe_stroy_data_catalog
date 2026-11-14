@@ -349,49 +349,102 @@ def compute_dq_metadata(catalog: dict):
                 duplicate_protection = None
                 if db_name.lower() == "dds":
                     first_col_lower = first_col_name.lower()
+                    table_col_map = {c.get("name", "").lower(): c.get("name", "") for c in columns}
                     col_names_lower = [c.get("name", "").lower() for c in columns]
                     has_dwh_start_date = "dwh_start_date" in col_names_lower
                     has_is_active = "is_active" in col_names_lower
                     
                     if is_first_id and has_dwh_start_date and has_is_active:
-                        # Проверяем, есть ли UNIQUE INDEX на первое поле (включая partial index с WHERE)
-                        has_unique_index_on_first = False
-                        
-                        # 1. Проверяем unique_constraints на одно поле
+                        # 1. Парсим уникальные индексы (ищем partial index с is_active)
+                        unique_indexes_parsed = []
+                        for idx in indexes:
+                            idx_upper = idx.upper()
+                            if "UNIQUE" in idx_upper:
+                                has_is_active_where = ("WHERE" in idx_upper and "IS_ACTIVE" in idx_upper)
+                                m = re.search(r'CREATE\s+UNIQUE\s+INDEX\s+([^\s]+)\s+ON\s+.*?\((.*?)\)(?:\s+WHERE\s+(.*))?$', idx, re.IGNORECASE)
+                                if m:
+                                    idx_name = m.group(1).split('.')[-1].strip('"')
+                                    raw_cols = [c.strip() for c in m.group(2).split(',')]
+                                    where_clause = m.group(3) or ""
+                                    is_partial_active = "is_active" in where_clause.lower() or has_is_active_where
+                                    unique_indexes_parsed.append({
+                                        "name": idx_name,
+                                        "cols": raw_cols,
+                                        "cols_lower": [c.lower() for c in raw_cols],
+                                        "is_active_where": is_partial_active
+                                    })
+
+                        # 2. Парсим уникальные ограничения (ищем наличие dwh_start_date и ключевые колонки)
+                        unique_constraints_parsed = []
                         for u_con in u_cons:
-                            u_con_cols_lower = [c.lower() for c in u_con.get("columns", [])]
-                            if len(u_con_cols_lower) == 1 and u_con_cols_lower[0] == first_col_lower:
-                                has_unique_index_on_first = True
+                            u_cols = u_con.get("columns", [])
+                            u_cols_lower = [c.lower() for c in u_cols]
+                            has_start_date = "dwh_start_date" in u_cols_lower
+                            key_cols = [c for c in u_cols if c.lower() != "dwh_start_date"]
+                            unique_constraints_parsed.append({
+                                "constraint_name": u_con.get("constraint_name"),
+                                "columns": u_cols,
+                                "has_dwh_start_date": has_start_date,
+                                "key_cols": key_cols,
+                                "key_cols_lower": [c.lower() for c in key_cols]
+                            })
+
+                        # 3. Сопоставляем индекс и ограничение:
+                        # Поддерживаются как одиночный ключ [first_col], так и составной [first_col, second_col]
+                        # Имена индекса и ограничения могут быть любыми (не обязательно _idx и _unique_version)
+                        matched_key_cols = None
+                        matched_index_name = None
+                        matched_constraint_name = None
+                        has_unique_index = False
+                        has_unique_constraint = False
+
+                        # Сначала ищем полное совпадение (и индекс, и ограничение с одинаковыми колонками)
+                        # Сортируем так, чтобы составной ключ (2 колонки) проверялся раньше одиночного
+                        sorted_constraints = sorted(
+                            [u for u in unique_constraints_parsed if u["has_dwh_start_date"] and len(u["key_cols"]) in (1, 2) and u["key_cols_lower"] and u["key_cols_lower"][0] == first_col_lower],
+                            key=lambda u: len(u["key_cols"]),
+                            reverse=True
+                        )
+                        for u in sorted_constraints:
+                            cand_lower = u["key_cols_lower"]
+                            for idx_info in unique_indexes_parsed:
+                                if idx_info["cols_lower"] == cand_lower and idx_info["is_active_where"]:
+                                    matched_key_cols = u["key_cols"]
+                                    matched_index_name = idx_info["name"]
+                                    matched_constraint_name = u["constraint_name"]
+                                    has_unique_index = True
+                                    has_unique_constraint = True
+                                    break
+                            if matched_key_cols:
                                 break
-                        
-                        # 2. Проверяем indexes (включая partial с WHERE is_active = true)
-                        if not has_unique_index_on_first:
-                            for idx in indexes:
-                                idx_upper = idx.upper()
-                                if "UNIQUE" in idx_upper:
-                                    # Проверяем, что индекс по первому полю (с или без WHERE)
-                                    first_col_upper = first_col_name.upper()
-                                    if f"({first_col_upper})" in idx_upper or f"({first_col_upper}, " in idx_upper:
-                                        has_unique_index_on_first = True
-                                        break
-                                    # Проверяем partial index с WHERE is_active
-                                    if "WHERE" in idx_upper and "IS_ACTIVE" in idx_upper and first_col_upper in idx_upper:
-                                        has_unique_index_on_first = True
-                                        break
-                        
-                        # Проверяем UNIQUE CONSTRAINT на (первое поле + dwh_start_date)
-                        has_unique_constraint_on_id_date = False
-                        target_cols = {first_col_lower, "dwh_start_date"}
-                        for u_con in u_cons:
-                            u_con_cols_lower = set([c.lower() for c in u_con.get("columns", [])])
-                            if u_con_cols_lower == target_cols:
-                                has_unique_constraint_on_id_date = True
+
+                        # Если полного совпадения нет, проверяем частичное наличие
+                        if not matched_key_cols:
+                            for u in sorted_constraints:
+                                matched_key_cols = u["key_cols"]
+                                matched_constraint_name = u["constraint_name"]
+                                has_unique_constraint = True
                                 break
-                        
+
+                        if not matched_key_cols:
+                            for idx_info in unique_indexes_parsed:
+                                if len(idx_info["cols"]) in (1, 2) and idx_info["cols_lower"] and idx_info["cols_lower"][0] == first_col_lower and idx_info["is_active_where"]:
+                                    matched_key_cols = [table_col_map.get(c, c) for c in idx_info["cols_lower"]]
+                                    matched_index_name = idx_info["name"]
+                                    has_unique_index = True
+                                    break
+
+                        if not matched_key_cols:
+                            matched_key_cols = [first_col_name]
+
                         duplicate_protection = {
-                            "has_unique_index": has_unique_index_on_first,
-                            "has_unique_constraint": has_unique_constraint_on_id_date,
+                            "has_unique_index": has_unique_index,
+                            "has_unique_constraint": has_unique_constraint,
                             "first_col_name": first_col_name,
+                            "key_columns": matched_key_cols,
+                            "cols_str": ", ".join(matched_key_cols),
+                            "index_name": matched_index_name or f"{table_name}_idx",
+                            "constraint_name": matched_constraint_name or f"{table_name}_unique_version",
                             "schema_name": schema_name,
                             "table_name": table_name,
                             "db_name": db_name

@@ -143,7 +143,7 @@ docs/
 | 4 | Table Propagation (протягивание таблицы) | протягивание, table propagation, протаскивание таблицы, propagation | `src/lineage/tablePropagation.js` | `docs/COLUMN_PROPAGATION.md` |
 | 5 | SQL Lineage Parsing | парсинг, parsing, SQL lineage, parse, sql_loader | `sql_loader.py`, `lineage/*.py` | `docs/SQL_RULES.md` |
 | 6 | Search Engine | поиск, search, searchbox, фильтр, индексирование, sidebarSearch, боковая панель, поиск объектов | `src/ui/search.js`, `src/ui/sidebarSearch.js` | `docs/LINEAGE_RULES.md` (места индексации) + `docs/UI_RULES.md` (поиск в боковой панели) |
-| 7 | UI | кнопка, диалог, модал*, меню, кнопок, вёрстка, стиль, css, класс, компонент, ui, интерфейс, tooltip, попап | `src/`, `templates/`, `static/style.css` | `docs/UI_RULES.md` + `docs/DESIGN_SYSTEM.md` |
+| 7 | UI / Экспорт / Data Quality | кнопка, диалог, модал*, меню, кнопок, вёрстка, стиль, css, класс, компонент, ui, интерфейс, tooltip, попап, экспорт, export, data quality, dq, дубли, primary_key | `src/`, `templates/`, `static/style.css` | `docs/UI_RULES.md` + `docs/DESIGN_SYSTEM.md` |
 | 8 | Smart Rebuild / Smart Execution Helper | пересчёт, пересборка, rebuild, new data, smart execution, выгрузка sql, очередь выполнения | `src/lineage/tableLineageRebuild.js` | `docs/SMART_EXECUTION_HELPER.md` |
 | 9 | SQL Obfuscator / Деобфускатор | обфускатор, деобфускатор, obfuscator, deobfuscate, alt+o, обезличивание, безопасный запрос, анонимизация | `src/utils/sqlObfuscator.js`, `src/ui/aiObfuscatorModal.js` | `docs/SQL_OBFUSCATOR.md` |
 | 10 | Script Delivery Mode (CTAS → DDL + INSERT) | ctas, ddl, insert, поставка, режим скрипта, script mode, dev контур, test контур | `src/utils/scriptTransform.js`, `templates/table.html` | `docs/SCRIPT_DELIVERY_MODE.md` |

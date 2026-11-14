@@ -1233,20 +1233,29 @@ function _downloadDocxAsIs(templateFile, uniqueId, dbName, schemaName, tableName
       if (objectType !== 'v' && objectType !== 'm') {
         const pkData = window.catalogData?.[dbName]?.[schemaName]?.[tableName]?.primary_key;
         const dqInfo = window.catalogData?.[dbName]?.[schemaName]?.[tableName]?.dq_info?.duplicate_protection;
+        const uCons = window.catalogData?.[dbName]?.[schemaName]?.[tableName]?.unique_constraints;
         const hasPk = pkData && pkData.columns && pkData.columns.length > 0;
         const hasDqProtection = dqInfo && dqInfo.has_unique_index && dqInfo.has_unique_constraint;
+        const hasUCons = uCons && uCons.length > 0;
         
         if (hasPk && hasDqProtection) {
           primaryKey = 'Лишний primary_key - нужно исправить!!!';
         } else if (hasDqProtection) {
-          const firstCol = dqInfo.first_col_name || rows[0]?.col_name || '';
-          primaryKey = `CREATE UNIQUE INDEX ${tableName}_idx
-ON ${dbName}.${schemaName}.${tableName} (${firstCol})
+          const colsStr = dqInfo.cols_str || (dqInfo.key_columns && dqInfo.key_columns.join(', ')) || dqInfo.first_col_name || rows[0]?.col_name || '';
+          const idxName = dqInfo.index_name || `${tableName}_idx`;
+          const conName = dqInfo.constraint_name || `${tableName}_unique_version`;
+          primaryKey = `CREATE UNIQUE INDEX ${idxName}
+ON ${dbName}.${schemaName}.${tableName} (${colsStr})
 WHERE is_active = true;
 
 ALTER TABLE ${dbName}.${schemaName}.${tableName}
-ADD CONSTRAINT ${tableName}_unique_version
-UNIQUE (${firstCol}, dwh_start_date);`;
+ADD CONSTRAINT ${conName}
+UNIQUE (${colsStr}, dwh_start_date);`;
+        } else if (dbName.toLowerCase() === 'dm' && hasUCons) {
+          primaryKey = uCons.map(u => {
+            const cols = (u.columns || []).join(', ');
+            return `ALTER TABLE ${dbName}.${schemaName}.${tableName}\n\tADD CONSTRAINT ${u.constraint_name} UNIQUE (${cols});`;
+          }).join('\n\n');
         } else if (hasPk) {
           primaryKey = pkData.columns.join(', ');
         } else {
