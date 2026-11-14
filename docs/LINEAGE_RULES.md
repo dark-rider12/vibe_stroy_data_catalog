@@ -172,3 +172,11 @@ Lineage может содержать десятки и сотни объект�
 
 Реализация: `lineage/column_lineage.py`, `_resolve_cte_source` +
 `_is_constant_expression`.
+
+---
+
+# Расчёт Column Lineage (Backend)
+
+* **Многопроцессорная параллелизация:** функция `compute_column_lineage` (`lineage/column_lineage.py`) распределяет обработку SQL-трансформаций по ядрам процессора (`concurrent.futures.ProcessPoolExecutor`, до 16 воркеров).
+* **Изоляция контекста:** схема DWH (`MappingSchema`) и карта колонок инициализируются один раз на каждый рабочий процесс (`_init_column_lineage_worker`), передавая между процессами только легковесные структуры.
+* **Ранняя фильтрация:** запросы к ручным справочникам `ref_manual_*` и `ref_source_system` отсекаются до этапа AST-парсинга. Таблицы `tmp_*` сохраняются и рассчитываются, если они присутствуют в каталоге.

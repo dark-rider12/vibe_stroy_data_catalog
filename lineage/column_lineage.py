@@ -3,7 +3,9 @@ MODULE: column_lineage.py
 ROLE: Построение зависимостей на уровне колонок (Data Mapping).
 """
 
+import os
 import re
+import concurrent.futures
 import sqlglot
 from sqlglot.lineage import lineage
 from sqlglot import exp
@@ -409,17 +411,527 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
     return expression_sql
 
 
+
+_COLUMN_LINEAGE_WORKER_CTX = {}
+
+
+def _init_column_lineage_worker(lookup: dict, schema_dict: dict, schema_lookahead: str, table_columns_map: dict):
+    global _COLUMN_LINEAGE_WORKER_CTX
+    from sqlglot.schema import MappingSchema
+    _COLUMN_LINEAGE_WORKER_CTX = {
+        "lookup": lookup,
+        "schema_lookahead": schema_lookahead,
+        "table_columns_map": table_columns_map,
+        "sqlglot_schema": MappingSchema(schema_dict),
+    }
+
+
+def _analyze_single_query_lineage(item: dict) -> tuple:
+    """
+    Анализирует один SQL-запрос для построения column lineage.
+    Возвращает кортеж: (target_table, col_lineage_dict, warning_message).
+    """
+    global _COLUMN_LINEAGE_WORKER_CTX
+    lookup = _COLUMN_LINEAGE_WORKER_CTX["lookup"]
+    schema_lookahead = _COLUMN_LINEAGE_WORKER_CTX["schema_lookahead"]
+    table_columns_map = _COLUMN_LINEAGE_WORKER_CTX["table_columns_map"]
+    sqlglot_schema = _COLUMN_LINEAGE_WORKER_CTX["sqlglot_schema"]
+
+    target_name = (item.get("target_table") or "").strip().lower()
+    if target_name:
+        t_short = target_name.split(".")[-1].strip(" \"'")
+        if t_short.startswith("ref_manual_") or t_short == "ref_source_system":
+            return (None, None, None)
+
+    sql = item.get("query", "")
+    default_db = item.get("db_name", "dwh").lower()
+    target_table = None
+    col_lineage = {}
+    try:
+        parsed = sqlglot.parse_one(sql, read="postgres")
+
+        target_table = None
+        if isinstance(parsed, exp.Create) and isinstance(parsed.this, exp.Table):
+            target_table = _get_table_id(parsed.this, default_db)
+        elif isinstance(parsed, exp.Insert):
+            target_table = _get_table_id(parsed.this, default_db)
+
+        if not target_table or target_table not in lookup:
+            return (None, None, None)
+
+        # Страховочная проверка по распарсенному target_table
+        t_short = target_table.split(".")[-1].lower()
+        if t_short.startswith("ref_manual_") or t_short == "ref_source_system":
+            return (None, None, None)
+
+        # --- Qualify columns to resolve table names ---
+        try:
+            parsed = qualify(parsed, schema=sqlglot_schema, dialect="postgres")
+        except Exception:
+            pass
+
+        select_expr = parsed.expression
+        # CREATE TABLE ... AS (SELECT ...) — sqlglot оборачивает SELECT в Subquery
+        if isinstance(select_expr, exp.Subquery):
+            select_expr = select_expr.this
+        if not isinstance(select_expr, (exp.Select, exp.Union)):
+            return (None, None, None)
+
+        # Для UNION ALL: получаем все ветки SELECT
+        # Имена колонок берём из первой ветки, expression_sql — из всех веток
+        union_branches = _get_union_selects(select_expr)
+        # Первая ветка используется для итерации по именам колонок и для lineage()
+        first_select = union_branches[0] if union_branches else select_expr
+
+        # Build alias mapping (реальные таблицы из FROM/JOIN, без CTE)
+        # CTE-имена намеренно исключаем — они обрабатываются отдельно через cte_map
+        alias_mapping = {}
+        for tbl in parsed.find_all(exp.Table):
+            if tbl is parsed.this: continue
+            full_tid = _get_table_id(tbl, default_db)
+            if full_tid:
+                if tbl.alias:
+                    alias_mapping[tbl.alias.lower()] = full_tid
+                alias_mapping[tbl.name.lower()] = full_tid
+
+        # Строим маппинг inline-view подзапросов: алиас → cte_info-подобная структура
+        # Пример: SELECT u.col FROM (SELECT ... UNION SELECT ...) u
+        # Здесь u — exp.Subquery с алиасом, а не exp.Table
+        subquery_map = {}
+        for subq in parsed.find_all(exp.Subquery):
+            # Пропускаем подзапросы без алиаса (скалярные подзапросы и т.п.)
+            if not subq.alias:
+                continue
+            subq_alias = subq.alias.lower()
+            subq_body = subq.this  # exp.Select или exp.Union
+            if not isinstance(subq_body, (exp.Select, exp.Union)):
+                continue
+            # Собираем таблицы внутри подзапроса
+            subq_alias_map = {}
+            for tbl in subq_body.find_all(exp.Table):
+                full_tid = _get_table_id(tbl, default_db)
+                if full_tid:
+                    if tbl.alias:
+                        subq_alias_map[tbl.alias.lower()] = full_tid
+                    subq_alias_map[tbl.name.lower()] = full_tid
+            subquery_map[subq_alias] = {'select': subq_body, 'alias_map': subq_alias_map}
+
+        # Строим CTE-маппинг из qualified AST
+        # With может быть как в parsed, так и в select_expr (зависит от версии sqlglot)
+        cte_map = {}
+        with_clause = parsed.find(exp.With) or select_expr.find(exp.With)
+        if with_clause:
+            # Первый проход: регистрируем все CTE с их прямыми таблицами
+            for cte in with_clause.expressions:
+                cte_name = cte.alias.lower() if cte.alias else ''
+                cte_body = cte.this  # может быть exp.Select или exp.Union (UNION ALL)
+                if not cte_name or not isinstance(cte_body, (exp.Select, exp.Union)):
+                    continue
+                # Собираем таблицы из всех веток (для UNION ALL — из каждой ветки)
+                cte_alias_map = {}
+                for tbl in cte_body.find_all(exp.Table):
+                    full_tid = _get_table_id(tbl, default_db)
+                    if full_tid:
+                        if tbl.alias:
+                            cte_alias_map[tbl.alias.lower()] = full_tid
+                        cte_alias_map[tbl.name.lower()] = full_tid
+                cte_map[cte_name] = {'select': cte_body, 'alias_map': cte_alias_map}
+
+            # Второй проход: рекурсивно разворачиваем ссылки CTE→CTE в alias_map.
+            # Повторяем до тех пор, пока в alias_map не останется ни одной ссылки на другой CTE.
+            # Это обрабатывает цепочки любой глубины: A→B→C→реальная_таблица.
+            #
+            # ВАЖНО: CTE-имена попадают в alias_map двумя способами:
+            #   1. Ключ совпадает с именем CTE: ref_lower in cte_map
+            #      (например, alias_map['account_calendar'] = 'dwh.account_calendar')
+            #   2. Ключ — это алиас CTE (напр. 'a'), а значение — псевдо-ID вида 'dwh.cte_name'
+            #      который _get_table_id построил из exp.Table с именем CTE.
+            #      В этом случае последняя часть tid совпадает с именем CTE в cte_map.
+            max_iterations = len(cte_map) + 1  # защита от циклических CTE
+            for _ in range(max_iterations):
+                changed = False
+                for cte_name, cte_info in cte_map.items():
+                    resolved_alias_map = {}
+                    for ref, tid in cte_info['alias_map'].items():
+                        ref_lower = ref.lower()
+                        # Способ 1: ключ — имя CTE
+                        target_cte = None
+                        if ref_lower in cte_map and ref_lower != cte_name:
+                            target_cte = ref_lower
+                        else:
+                            # Способ 2: значение tid — псевдо-ID для CTE
+                            # (последняя часть пути совпадает с именем CTE)
+                            tid_last = tid.split('.')[-1].lower()
+                            if tid_last in cte_map and tid_last != cte_name:
+                                target_cte = tid_last
+                        if target_cte:
+                            # Разворачиваем ссылку на другой CTE
+                            for inner_ref, inner_tid in cte_map[target_cte]['alias_map'].items():
+                                resolved_alias_map[inner_ref] = inner_tid
+                            changed = True
+                        else:
+                            resolved_alias_map[ref] = tid
+                    cte_info['alias_map'] = resolved_alias_map
+                if not changed:
+                    break
+
+        # Строим маппинг алиасов CTE: "ast" -> "account_stats"
+        cte_alias_to_name = {}
+        for tbl in parsed.find_all(exp.Table):
+            if tbl is parsed.this: continue
+            if tbl.alias and tbl.name.lower() in cte_map:
+                cte_alias_to_name[tbl.alias.lower()] = tbl.name.lower()
+
+        # Удаляем из alias_mapping все ключи, которые являются именами или алиасами CTE.
+        # Также удаляем ключи, чьи значения — псевдо-ID для CTE (напр. 'a' → 'dwh.daily_flows'),
+        # которые _get_table_id построил из exp.Table с именем CTE.
+        cte_keys_to_remove = set(cte_map.keys()) | set(cte_alias_to_name.keys())
+        # Добавляем ключи с псевдо-ID: последняя часть значения совпадает с именем CTE
+        for k, v in list(alias_mapping.items()):
+            if v.split('.')[-1].lower() in cte_map:
+                cte_keys_to_remove.add(k)
+        for k in cte_keys_to_remove:
+            alias_mapping.pop(k, None)
+
+        # Удаляем из alias_mapping алиасы inline-view подзапросов
+        for k in subquery_map.keys():
+            alias_mapping.pop(k, None)
+
+        # Строим маппинг LATERAL-функций: алиас → раскрытое SQL-выражение тела функции.
+        # Пример: CROSS JOIN LATERAL generate_series(a.open_date, ...) AS report_date
+        # → lateral_map['report_date'] = 'generate_series(dds.account_detail.open_date, ...)'
+        # Обходим всё дерево (включая CTE и подзапросы), поэтому работает для любого паттерна.
+        lateral_map = {}
+        for lat in parsed.find_all(exp.Lateral):
+            lat_alias = lat.alias.lower() if lat.alias else ''
+            if not lat_alias or lat.this is None:
+                continue
+            lat_sql = _node_to_expr(lat.this)
+            lat_sql = _strip_sql_comments(lat_sql)
+            lat_sql = re.sub(r'"[A-Za-z0-9_]+"\.', lambda m: m.group(0).replace('"', ''), lat_sql)
+            lat_sql = lat_sql.replace('"', '')
+            # Раскрываем алиасы таблиц внутри тела lateral через alias_mapping
+            for alias_key in sorted(alias_mapping.keys(), key=len, reverse=True):
+                full_tid = alias_mapping[alias_key]
+                if lookup and full_tid in lookup:
+                    db_orig, schema_orig, name_orig = lookup[full_tid]
+                    table_ref = f"{db_orig}.{schema_orig}.{name_orig}"
+                else:
+                    table_parts = full_tid.split('.')
+                    table_ref = '.'.join(table_parts[-3:]) if len(table_parts) >= 3 else '.'.join(table_parts)
+                lat_sql = re.sub(
+                    rf'(?<![\w.])({re.escape(alias_key)})\.',
+                    f'{table_ref}.',
+                    lat_sql,
+                    flags=re.IGNORECASE
+                )
+            lateral_map[lat_alias] = lat_sql
+
+        # Расширенный маппинг: алиасы CTE тоже считаются CTE-ссылками,
+        # inline-view подзапросы раскрываются тем же механизмом.
+        effective_cte = dict(cte_map)
+        for a, cn in cte_alias_to_name.items():
+            if cn in cte_map:
+                effective_cte[a] = cte_map[cn]
+        effective_cte.update(subquery_map)
+
+        # Предобрабатываем ветки UNION/UNION ALL:
+        #   * локальный alias_map каждой ветки (алиасы могут повторяться между ветками);
+        #   * WITH-клаузу из верхнего запроса — lineage() резолвит CTE через неё.
+        # Каждая ветка сохраняется отдельно, чтобы источники колонок собирались
+        # из ВСЕХ веток, а не только из первой (first_select).
+        parsed_with = parsed.args.get("with")
+        branch_infos = []
+        for part in _get_union_parts(select_expr):
+            if isinstance(part, str):
+                # оператор между ветками: 'UNION', 'UNION ALL', ...
+                branch_infos.append(part)
+                continue
+            branch_alias_map = {}
+            for tbl in part.find_all(exp.Table):
+                full_tid = _get_table_id(tbl, default_db)
+                if full_tid:
+                    if tbl.alias:
+                        branch_alias_map[tbl.alias.lower()] = full_tid
+                    branch_alias_map[tbl.name.lower()] = full_tid
+            # Убираем из локального маппинга алиасы CTE и subquery (раскрываются отдельно)
+            cte_and_subq_keys = set(cte_map.keys()) | set(cte_alias_to_name.keys()) | set(subquery_map.keys())
+            for k in list(branch_alias_map.keys()):
+                if k in cte_and_subq_keys:
+                    del branch_alias_map[k]
+                elif branch_alias_map.get(k, '').split('.')[-1].lower() in cte_map:
+                    del branch_alias_map[k]
+            # Если ветка не содержит своих таблиц — fallback на глобальный alias_mapping
+            effective_alias_map = branch_alias_map if branch_alias_map else alias_mapping
+            branch = part
+            if parsed_with and not branch.find(exp.With):
+                branch = part.copy()
+                branch.set("with", parsed_with)
+            branch_infos.append({"select": branch, "alias_map": effective_alias_map})
+
+        if parsed.args.get("with"):
+            first_select.set("with", parsed.args.get("with"))
+
+        # Получаем список колонок целевой таблицы для позиционного сопоставления
+        table_columns = table_columns_map.get(target_table.lower(), [])
+
+        for i, select_item in enumerate(first_select.selects):
+            alias = select_item.alias_or_name
+            
+            # Если алиаса нет (напр. в INSERT), берем имя колонки по позиции из метаданных
+            if not alias and i < len(table_columns):
+                alias = table_columns[i]
+            
+            if not alias: continue
+
+            # Собираем expression_sql из ВСЕХ веток UNION (с реальным оператором из AST)
+            # Для обычного SELECT — одна ветка, результат тот же что раньше
+            branch_expressions = []  # (operator_before, sql)
+            pending_op = ''
+            for bi in branch_infos:
+                if isinstance(bi, str):
+                    pending_op = bi
+                    continue
+                branch = bi['select']
+                if i >= len(branch.selects):
+                    pending_op = ''
+                    continue
+                branch_item = branch.selects[i]
+                if isinstance(branch_item, exp.Alias):
+                    raw_expr_node = branch_item.this
+                else:
+                    raw_expr_node = branch_item
+
+                branch_sql = _node_to_expr(raw_expr_node)
+                branch_sql = _strip_sql_comments(branch_sql)
+                # Убираем артефакты квалификации: "DWH"., "ods"., "dds". и кавычки вокруг имён БД
+                branch_sql = re.sub(r'"[A-Za-z0-9_]+"\.', lambda m: m.group(0).replace('"', ''), branch_sql)
+                branch_sql = branch_sql.replace('"', '')
+
+                # Локальный alias_map ветки уже посчитан заранее (branch_infos)
+                effective_alias_map = bi['alias_map']
+                branch_sql_lower = branch_sql.lower()
+
+                for alias_key in sorted(effective_alias_map.keys(), key=len, reverse=True):
+                    if alias_key not in branch_sql_lower:
+                        continue
+                    full_tid = effective_alias_map[alias_key]
+                    if lookup and full_tid in lookup:
+                        db_orig, schema_orig, name_orig = lookup[full_tid]
+                        table_ref = f"{db_orig}.{schema_orig}.{name_orig}"
+                    else:
+                        table_parts = full_tid.split('.')
+                        table_ref = '.'.join(table_parts[-3:]) if len(table_parts) >= 3 else '.'.join(table_parts)
+                    branch_sql = re.sub(
+                        rf'(?<![\w.])({re.escape(alias_key)})\.{schema_lookahead}',
+                        f'{table_ref}.',
+                        branch_sql,
+                        flags=re.IGNORECASE
+                    )
+                    branch_sql_lower = branch_sql.lower()
+
+                branch_sql = _resolve_cte_refs(branch_sql, cte_map, cte_alias_to_name, lookup, default_db, None, schema_lookahead)
+                # Раскрываем алиасы inline-view подзапросов (аналогично CTE)
+                branch_sql = _resolve_cte_refs(branch_sql, subquery_map, {}, lookup, default_db, None, schema_lookahead)
+                branch_expressions.append((pending_op, branch_sql))
+                pending_op = ''
+
+            # Если все ветки дали одинаковое выражение — показываем одно
+            unique_sqls = list(dict.fromkeys(s for _, s in branch_expressions))
+            if len(unique_sqls) == 1:
+                expression_sql = unique_sqls[0]
+            elif branch_expressions:
+                result_parts = []
+                for op, sql in branch_expressions:
+                    if result_parts:
+                        result_parts.append(f'\n{op}\n')
+                    result_parts.append(sql)
+                expression_sql = ''.join(result_parts)
+            else:
+                expression_sql = ''
+
+            # Если expression_sql — это голый алиас LATERAL-функции (например, "report_date"),
+            # подставляем раскрытое выражение тела функции из lateral_map.
+            if expression_sql.strip().lower() in lateral_map:
+                expression_sql = lateral_map[expression_sql.strip().lower()]
+
+            target_col = alias.lower()
+
+            # Сохраняем выражение СРАЗУ, чтобы Вариант 1 мог его проанализировать
+            if target_col not in col_lineage:
+                col_lineage[target_col] = {"expression": expression_sql, "sources": []}
+            else:
+                col_lineage[target_col]["expression"] = expression_sql
+
+            # Собираем источники ИЗ КАЖДОЙ ветки UNION (не только из первой).
+            # Каждая ветка имеет свой alias_map и свой WITH-scope.
+            source_columns = []
+            for bi in branch_infos:
+                if isinstance(bi, str):
+                    continue
+                branch = bi['select']
+                effective_alias_map = bi['alias_map']
+                if i >= len(branch.selects):
+                    continue
+                branch_item = branch.selects[i]
+                if isinstance(branch_item, exp.Alias):
+                    branch_raw = branch_item.this
+                else:
+                    branch_raw = branch_item
+                # Имя колонки для lineage() берём из текущей ветки
+                branch_alias = branch_item.alias_or_name or alias
+
+                found = False
+                # ПРЯМОЕ разрешение ссылок на CTE/подзапрос с UNION-телом.
+                # Листья lineage() для такого случая квалифицируются веточным алиасом
+                # (напр. 'cc.client_id' при переиспользуемом 'cc' в обеих ветках),
+                # и глобальный alias_mapping затирает первую ветку последней.
+                # Поэтому для ссылок на union-подзапрос/CTE источники собираем через
+                # _resolve_cte_source_column (ветка = свой alias_map). Это авторитетно:
+                # если источников нет (все ветки — константы) — walk не запускаем.
+                try:
+                    base_item = branch_item.this if isinstance(branch_item, exp.Alias) else branch_item
+                    if isinstance(base_item, exp.Column) and base_item.table:
+                        union_ref = None
+                        cte_ref_info = effective_cte.get(base_item.table.lower())
+                        if cte_ref_info:
+                            cte_ref_body = cte_ref_info.get('select')
+                            if isinstance(cte_ref_body, exp.Union) or len(_get_union_selects(cte_ref_body)) > 1:
+                                union_ref = base_item.table.lower()
+                        if union_ref:
+                            for resolved_cte in _resolve_cte_source_column(union_ref, base_item.name or alias, effective_cte, lookup, default_db):
+                                source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
+                                found = True
+                            continue
+                except Exception:
+                    pass
+
+                try:
+                    node = lineage(branch_alias, branch, schema=sqlglot_schema, dialect="postgres")
+                    # Если qualify сломался на уровне всего запроса, lineage может вернуть корень без downstream
+                    if not node.downstream:
+                        node_fallback = lineage(branch_alias, branch, dialect="postgres")
+                        if node_fallback.downstream:
+                            node = node_fallback
+
+                    for n in node.walk():
+                        if not n.downstream:
+                            clean_name = n.name.replace('"', '').replace("'", "")
+                            col_name = None
+                            src_table = None
+
+                            if '.' in clean_name:
+                                parts = clean_name.split('.')
+                                col_name = parts[-1]
+                                table_candidate = parts[-2].lower()
+
+                                if table_candidate in effective_alias_map:
+                                    src_table = effective_alias_map[table_candidate]
+                                elif table_candidate in effective_cte:
+                                    # CTE/подзапрос может содержать UNION — несколько источников (по ветке)
+                                    for resolved_cte in _resolve_cte_source_column(table_candidate, col_name, effective_cte, lookup, default_db):
+                                        source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
+                                        found = True
+                                    continue
+                                else:
+                                    cand_db = parts[-3].lower() if len(parts) >= 3 and parts[-3].lower() in ("ods", "dds", "dm") else None
+                                    matched = False
+                                    if cand_db:
+                                        for tid in lookup.keys():
+                                            tid_parts = tid.split('.')
+                                            if len(tid_parts) == 3 and tid_parts[0] == cand_db and tid_parts[2] == table_candidate:
+                                                src_table = tid
+                                                matched = True
+                                                break
+                                    if not matched:
+                                        for tid in lookup.keys():
+                                            if tid.split('.')[-1] == table_candidate:
+                                                src_table = tid
+                                                break
+                            else:
+                                col_name = clean_name
+                                if hasattr(n, 'source') and isinstance(n.source, exp.Table):
+                                    src_table = _get_table_id(n.source, default_db)
+                                elif hasattr(n, 'expression') and isinstance(n.expression, exp.Column):
+                                    # Реальная колонка-источник (не алиас вывода типа client_name)
+                                    col_name = n.expression.name
+                                    if n.expression.table:
+                                        tbl_ref = n.expression.table.lower()
+                                        if tbl_ref in effective_alias_map:
+                                            src_table = effective_alias_map.get(tbl_ref)
+                                        elif tbl_ref in effective_cte:
+                                            for resolved_cte in _resolve_cte_source_column(tbl_ref, col_name, effective_cte, lookup, default_db):
+                                                source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
+                                                found = True
+                                            continue
+                                        else:
+                                            for tid in lookup.keys():
+                                                if tid.split('.')[-1] == tbl_ref:
+                                                    src_table = tid
+                                                    break
+
+                            if src_table:
+                                source_columns.append({"table": src_table, "column": col_name or "*"})
+                                found = True
+                except Exception:
+                    pass
+
+                # FALLBACK для этой ветки: если lineage не нашел колонок — ищем в самом выражении
+                if not found and branch_raw:
+                    try:
+                        for col_node in branch_raw.find_all(exp.Column):
+                            col_name = col_node.name
+                            col_table_alias = col_node.table.lower() if col_node.table else None
+                            src_table = None
+                            cte_appended = False
+
+                            if col_table_alias:
+                                if col_table_alias in effective_alias_map:
+                                    src_table = effective_alias_map[col_table_alias]
+                                elif col_table_alias in effective_cte:
+                                    for resolved_cte in _resolve_cte_source_column(col_table_alias, col_name, effective_cte, lookup, default_db):
+                                        source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1]})
+                                        found = True
+                                    cte_appended = True
+                                else:
+                                    for tid in lookup.keys():
+                                        if tid.split('.')[-1] == col_table_alias:
+                                            src_table = tid
+                                            break
+                            if src_table and col_name and not cte_appended:
+                                source_columns.append({"table": src_table, "column": col_name})
+                                found = True
+                    except Exception:
+                        pass
+
+            if source_columns:
+                for sc in source_columns:
+                    tbl_key = sc["table"]
+                    if tbl_key in lookup:
+                        db_s, schema_s, name_s = lookup[tbl_key]
+                        src_tbl_str = f"{db_s}.{schema_s}.{name_s}"
+                    else:
+                        src_tbl_str = tbl_key
+                    entry = {"source_table": src_tbl_str, "source_column": sc["column"]}
+                    if entry not in col_lineage[target_col]["sources"]:
+                        col_lineage[target_col]["sources"].append(entry)
+        return (target_table, col_lineage, None)
+    except Exception as e:
+        warning_msg = f"   [Column Lineage Warning] Ошибка расчета для {target_table or item.get('target_table')}: {e}"
+        return (None, None, warning_msg)
+
 def compute_column_lineage(catalog: dict, sql_transformations: list[dict], existing_tables: set = None) -> dict:
     """
-    Строит граф зависимостей колонок (column_lineage) с помощью sqlglot.
+    Строит граф зависимостей колонок (column_lineage) с помощью sqlglot
+    с ранней фильтрацией и многопроцессорной параллелизацией.
     """
-    print(f"   - Анализ {len(sql_transformations)} запросов для column lineage...")
+    total_queries = len(sql_transformations)
+    print(f"   - Анализ {total_queries} запросов для column lineage...")
 
     lookup = {}
     for db_name, schemas in catalog.items():
         if db_name == "CorpusName": continue
         for schema_name, tables in schemas.items():
-            # Пропускаем таблицы схемы public из lineage (они технические)
             if schema_name == 'public':
                 continue
             for table_name, table_obj in tables.items():
@@ -429,507 +941,93 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
                 full_key = f"{db_name}.{schema_name}.{table_name}".lower()
                 lookup[full_key] = (db_name, schema_name, table_name)
 
-    # Build schema for sqlglot to resolve * and ambiguous columns
+    valid_table_names = {t.lower() for (db, s, t) in lookup.values()}
+
     schema_dict = {}
+    table_columns_map = {}
     for key, (db, schema, table) in lookup.items():
         table_obj = catalog[db][schema][table]
-        cols = {col["name"].lower(): "string" for col in table_obj.get("columns", [])}
-        
+        cols_list = [col["name"].lower() for col in table_obj.get("columns", [])]
+        table_columns_map[key] = cols_list
+        cols = {col_name: "string" for col_name in cols_list}
+
         if db not in schema_dict:
             schema_dict[db] = {}
         if schema not in schema_dict[db]:
             schema_dict[db][schema] = {}
-            
         schema_dict[db][schema][table] = cols
 
-    from sqlglot.schema import MappingSchema
-    sqlglot_schema = MappingSchema(schema_dict)
     schema_lookahead = _build_schema_lookahead(catalog)
 
+    # Фильтрация ручных справочников (ref_manual_*)
+    filtered_items = []
     for item in sql_transformations:
-        # Пропускаем ручные справочники — для них не строим входящий column lineage
-        target_name = (item.get("target_table") or "").lower()
-        if target_name.startswith("ref_manual_") or target_name == "ref_source_system":
-            continue
-
-        sql = item["query"]
-        # default_db: база, из которой пришёл скрипт (для резолвинга таблиц без явного db)
-        default_db = item.get("db_name", "dwh").lower()
-        try:
-            parsed = sqlglot.parse_one(sql, read="postgres")
-
-            target_table = None
-            if isinstance(parsed, exp.Create) and isinstance(parsed.this, exp.Table):
-                target_table = _get_table_id(parsed.this, default_db)
-            elif isinstance(parsed, exp.Insert):
-                target_table = _get_table_id(parsed.this, default_db)
-
-            if not target_table or target_table not in lookup:
-                continue
-
-            # Страховочная проверка по распарсенному target_table
-            t_short = target_table.split(".")[-1].lower()
+        target_name = (item.get("target_table") or "").strip().lower()
+        if target_name:
+            t_short = target_name.split(".")[-1].strip(" \"'")
             if t_short.startswith("ref_manual_") or t_short == "ref_source_system":
                 continue
 
-            # --- Qualify columns to resolve table names ---
-            try:
-                parsed = qualify(parsed, schema=sqlglot_schema, dialect="postgres")
-            except Exception:
-                pass
-
-            select_expr = parsed.expression
-            # CREATE TABLE ... AS (SELECT ...) — sqlglot оборачивает SELECT в Subquery
-            if isinstance(select_expr, exp.Subquery):
-                select_expr = select_expr.this
-            if not isinstance(select_expr, (exp.Select, exp.Union)):
-                continue
-
-            # Для UNION ALL: получаем все ветки SELECT
-            # Имена колонок берём из первой ветки, expression_sql — из всех веток
-            union_branches = _get_union_selects(select_expr)
-            # Первая ветка используется для итерации по именам колонок и для lineage()
-            first_select = union_branches[0] if union_branches else select_expr
-
-            # Build alias mapping (реальные таблицы из FROM/JOIN, без CTE)
-            # CTE-имена намеренно исключаем — они обрабатываются отдельно через cte_map
-            alias_mapping = {}
-            for tbl in parsed.find_all(exp.Table):
-                if tbl is parsed.this: continue
-                full_tid = _get_table_id(tbl, default_db)
-                if full_tid:
-                    if tbl.alias:
-                        alias_mapping[tbl.alias.lower()] = full_tid
-                    alias_mapping[tbl.name.lower()] = full_tid
-
-            # Строим маппинг inline-view подзапросов: алиас → cte_info-подобная структура
-            # Пример: SELECT u.col FROM (SELECT ... UNION SELECT ...) u
-            # Здесь u — exp.Subquery с алиасом, а не exp.Table
-            subquery_map = {}
-            for subq in parsed.find_all(exp.Subquery):
-                # Пропускаем подзапросы без алиаса (скалярные подзапросы и т.п.)
-                if not subq.alias:
-                    continue
-                subq_alias = subq.alias.lower()
-                subq_body = subq.this  # exp.Select или exp.Union
-                if not isinstance(subq_body, (exp.Select, exp.Union)):
-                    continue
-                # Собираем таблицы внутри подзапроса
-                subq_alias_map = {}
-                for tbl in subq_body.find_all(exp.Table):
-                    full_tid = _get_table_id(tbl, default_db)
-                    if full_tid:
-                        if tbl.alias:
-                            subq_alias_map[tbl.alias.lower()] = full_tid
-                        subq_alias_map[tbl.name.lower()] = full_tid
-                subquery_map[subq_alias] = {'select': subq_body, 'alias_map': subq_alias_map}
-
-            # Строим CTE-маппинг из qualified AST
-            # With может быть как в parsed, так и в select_expr (зависит от версии sqlglot)
-            cte_map = {}
-            with_clause = parsed.find(exp.With) or select_expr.find(exp.With)
-            if with_clause:
-                # Первый проход: регистрируем все CTE с их прямыми таблицами
-                for cte in with_clause.expressions:
-                    cte_name = cte.alias.lower() if cte.alias else ''
-                    cte_body = cte.this  # может быть exp.Select или exp.Union (UNION ALL)
-                    if not cte_name or not isinstance(cte_body, (exp.Select, exp.Union)):
-                        continue
-                    # Собираем таблицы из всех веток (для UNION ALL — из каждой ветки)
-                    cte_alias_map = {}
-                    for tbl in cte_body.find_all(exp.Table):
-                        full_tid = _get_table_id(tbl, default_db)
-                        if full_tid:
-                            if tbl.alias:
-                                cte_alias_map[tbl.alias.lower()] = full_tid
-                            cte_alias_map[tbl.name.lower()] = full_tid
-                    cte_map[cte_name] = {'select': cte_body, 'alias_map': cte_alias_map}
-
-                # Второй проход: рекурсивно разворачиваем ссылки CTE→CTE в alias_map.
-                # Повторяем до тех пор, пока в alias_map не останется ни одной ссылки на другой CTE.
-                # Это обрабатывает цепочки любой глубины: A→B→C→реальная_таблица.
-                #
-                # ВАЖНО: CTE-имена попадают в alias_map двумя способами:
-                #   1. Ключ совпадает с именем CTE: ref_lower in cte_map
-                #      (например, alias_map['account_calendar'] = 'dwh.account_calendar')
-                #   2. Ключ — это алиас CTE (напр. 'a'), а значение — псевдо-ID вида 'dwh.cte_name'
-                #      который _get_table_id построил из exp.Table с именем CTE.
-                #      В этом случае последняя часть tid совпадает с именем CTE в cte_map.
-                max_iterations = len(cte_map) + 1  # защита от циклических CTE
-                for _ in range(max_iterations):
-                    changed = False
-                    for cte_name, cte_info in cte_map.items():
-                        resolved_alias_map = {}
-                        for ref, tid in cte_info['alias_map'].items():
-                            ref_lower = ref.lower()
-                            # Способ 1: ключ — имя CTE
-                            target_cte = None
-                            if ref_lower in cte_map and ref_lower != cte_name:
-                                target_cte = ref_lower
-                            else:
-                                # Способ 2: значение tid — псевдо-ID для CTE
-                                # (последняя часть пути совпадает с именем CTE)
-                                tid_last = tid.split('.')[-1].lower()
-                                if tid_last in cte_map and tid_last != cte_name:
-                                    target_cte = tid_last
-                            if target_cte:
-                                # Разворачиваем ссылку на другой CTE
-                                for inner_ref, inner_tid in cte_map[target_cte]['alias_map'].items():
-                                    resolved_alias_map[inner_ref] = inner_tid
-                                changed = True
-                            else:
-                                resolved_alias_map[ref] = tid
-                        cte_info['alias_map'] = resolved_alias_map
-                    if not changed:
-                        break
-
-            # Строим маппинг алиасов CTE: "ast" -> "account_stats"
-            cte_alias_to_name = {}
-            for tbl in parsed.find_all(exp.Table):
-                if tbl is parsed.this: continue
-                if tbl.alias and tbl.name.lower() in cte_map:
-                    cte_alias_to_name[tbl.alias.lower()] = tbl.name.lower()
-
-            # Удаляем из alias_mapping все ключи, которые являются именами или алиасами CTE.
-            # Также удаляем ключи, чьи значения — псевдо-ID для CTE (напр. 'a' → 'dwh.daily_flows'),
-            # которые _get_table_id построил из exp.Table с именем CTE.
-            cte_keys_to_remove = set(cte_map.keys()) | set(cte_alias_to_name.keys())
-            # Добавляем ключи с псевдо-ID: последняя часть значения совпадает с именем CTE
-            for k, v in list(alias_mapping.items()):
-                if v.split('.')[-1].lower() in cte_map:
-                    cte_keys_to_remove.add(k)
-            for k in cte_keys_to_remove:
-                alias_mapping.pop(k, None)
-
-            # Удаляем из alias_mapping алиасы inline-view подзапросов
-            for k in subquery_map.keys():
-                alias_mapping.pop(k, None)
-
-            # Строим маппинг LATERAL-функций: алиас → раскрытое SQL-выражение тела функции.
-            # Пример: CROSS JOIN LATERAL generate_series(a.open_date, ...) AS report_date
-            # → lateral_map['report_date'] = 'generate_series(dds.account_detail.open_date, ...)'
-            # Обходим всё дерево (включая CTE и подзапросы), поэтому работает для любого паттерна.
-            lateral_map = {}
-            for lat in parsed.find_all(exp.Lateral):
-                lat_alias = lat.alias.lower() if lat.alias else ''
-                if not lat_alias or lat.this is None:
-                    continue
-                lat_sql = _node_to_expr(lat.this)
-                lat_sql = _strip_sql_comments(lat_sql)
-                lat_sql = re.sub(r'"[A-Za-z0-9_]+"\.', lambda m: m.group(0).replace('"', ''), lat_sql)
-                lat_sql = lat_sql.replace('"', '')
-                # Раскрываем алиасы таблиц внутри тела lateral через alias_mapping
-                for alias_key in sorted(alias_mapping.keys(), key=len, reverse=True):
-                    full_tid = alias_mapping[alias_key]
-                    if lookup and full_tid in lookup:
-                        db_orig, schema_orig, name_orig = lookup[full_tid]
-                        table_ref = f"{db_orig}.{schema_orig}.{name_orig}"
-                    else:
-                        table_parts = full_tid.split('.')
-                        table_ref = '.'.join(table_parts[-3:]) if len(table_parts) >= 3 else '.'.join(table_parts)
-                    lat_sql = re.sub(
-                        rf'(?<![\w.])({re.escape(alias_key)})\.',
-                        f'{table_ref}.',
-                        lat_sql,
-                        flags=re.IGNORECASE
-                    )
-                lateral_map[lat_alias] = lat_sql
-
-            # Расширенный маппинг: алиасы CTE тоже считаются CTE-ссылками,
-            # inline-view подзапросы раскрываются тем же механизмом.
-            effective_cte = dict(cte_map)
-            for a, cn in cte_alias_to_name.items():
-                if cn in cte_map:
-                    effective_cte[a] = cte_map[cn]
-            effective_cte.update(subquery_map)
-
-            # Предобрабатываем ветки UNION/UNION ALL:
-            #   * локальный alias_map каждой ветки (алиасы могут повторяться между ветками);
-            #   * WITH-клаузу из верхнего запроса — lineage() резолвит CTE через неё.
-            # Каждая ветка сохраняется отдельно, чтобы источники колонок собирались
-            # из ВСЕХ веток, а не только из первой (first_select).
-            parsed_with = parsed.args.get("with")
-            branch_infos = []
-            for part in _get_union_parts(select_expr):
-                if isinstance(part, str):
-                    # оператор между ветками: 'UNION', 'UNION ALL', ...
-                    branch_infos.append(part)
-                    continue
-                branch_alias_map = {}
-                for tbl in part.find_all(exp.Table):
-                    full_tid = _get_table_id(tbl, default_db)
-                    if full_tid:
-                        if tbl.alias:
-                            branch_alias_map[tbl.alias.lower()] = full_tid
-                        branch_alias_map[tbl.name.lower()] = full_tid
-                # Убираем из локального маппинга алиасы CTE и subquery (раскрываются отдельно)
-                cte_and_subq_keys = set(cte_map.keys()) | set(cte_alias_to_name.keys()) | set(subquery_map.keys())
-                for k in list(branch_alias_map.keys()):
-                    if k in cte_and_subq_keys:
-                        del branch_alias_map[k]
-                    elif branch_alias_map.get(k, '').split('.')[-1].lower() in cte_map:
-                        del branch_alias_map[k]
-                # Если ветка не содержит своих таблиц — fallback на глобальный alias_mapping
-                effective_alias_map = branch_alias_map if branch_alias_map else alias_mapping
-                branch = part
-                if parsed_with and not branch.find(exp.With):
-                    branch = part.copy()
-                    branch.set("with", parsed_with)
-                branch_infos.append({"select": branch, "alias_map": effective_alias_map})
-
-            if parsed.args.get("with"):
-                first_select.set("with", parsed.args.get("with"))
-
-            # Получаем список колонок целевой таблицы для позиционного сопоставления
-            db_t, schema_t, name_t = lookup[target_table]
-            table_columns = [c["name"].lower() for c in catalog[db_t][schema_t][name_t].get("columns", [])]
-
-            for i, select_item in enumerate(first_select.selects):
-                alias = select_item.alias_or_name
-                
-                # Если алиаса нет (напр. в INSERT), берем имя колонки по позиции из метаданных
-                if not alias and i < len(table_columns):
-                    alias = table_columns[i]
-                
-                if not alias: continue
-
-                # Собираем expression_sql из ВСЕХ веток UNION (с реальным оператором из AST)
-                # Для обычного SELECT — одна ветка, результат тот же что раньше
-                branch_expressions = []  # (operator_before, sql)
-                pending_op = ''
-                for bi in branch_infos:
-                    if isinstance(bi, str):
-                        pending_op = bi
-                        continue
-                    branch = bi['select']
-                    if i >= len(branch.selects):
-                        pending_op = ''
-                        continue
-                    branch_item = branch.selects[i]
-                    if isinstance(branch_item, exp.Alias):
-                        raw_expr_node = branch_item.this
-                    else:
-                        raw_expr_node = branch_item
-
-                    branch_sql = _node_to_expr(raw_expr_node)
-                    branch_sql = _strip_sql_comments(branch_sql)
-                    # Убираем артефакты квалификации: "DWH"., "ods"., "dds". и кавычки вокруг имён БД
-                    branch_sql = re.sub(r'"[A-Za-z0-9_]+"\.', lambda m: m.group(0).replace('"', ''), branch_sql)
-                    branch_sql = branch_sql.replace('"', '')
-
-                    # Локальный alias_map ветки уже посчитан заранее (branch_infos)
-                    effective_alias_map = bi['alias_map']
-                    branch_sql_lower = branch_sql.lower()
-
-                    for alias_key in sorted(effective_alias_map.keys(), key=len, reverse=True):
-                        if alias_key not in branch_sql_lower:
-                            continue
-                        full_tid = effective_alias_map[alias_key]
-                        if lookup and full_tid in lookup:
-                            db_orig, schema_orig, name_orig = lookup[full_tid]
-                            table_ref = f"{db_orig}.{schema_orig}.{name_orig}"
-                        else:
-                            table_parts = full_tid.split('.')
-                            table_ref = '.'.join(table_parts[-3:]) if len(table_parts) >= 3 else '.'.join(table_parts)
-                        branch_sql = re.sub(
-                            rf'(?<![\w.])({re.escape(alias_key)})\.{schema_lookahead}',
-                            f'{table_ref}.',
-                            branch_sql,
-                            flags=re.IGNORECASE
-                        )
-                        branch_sql_lower = branch_sql.lower()
-
-                    branch_sql = _resolve_cte_refs(branch_sql, cte_map, cte_alias_to_name, lookup, default_db, None, schema_lookahead)
-                    # Раскрываем алиасы inline-view подзапросов (аналогично CTE)
-                    branch_sql = _resolve_cte_refs(branch_sql, subquery_map, {}, lookup, default_db, None, schema_lookahead)
-                    branch_expressions.append((pending_op, branch_sql))
-                    pending_op = ''
-
-                # Если все ветки дали одинаковое выражение — показываем одно
-                unique_sqls = list(dict.fromkeys(s for _, s in branch_expressions))
-                if len(unique_sqls) == 1:
-                    expression_sql = unique_sqls[0]
-                elif branch_expressions:
-                    result_parts = []
-                    for op, sql in branch_expressions:
-                        if result_parts:
-                            result_parts.append(f'\n{op}\n')
-                        result_parts.append(sql)
-                    expression_sql = ''.join(result_parts)
-                else:
-                    expression_sql = ''
-
-                # Если expression_sql — это голый алиас LATERAL-функции (например, "report_date"),
-                # подставляем раскрытое выражение тела функции из lateral_map.
-                if expression_sql.strip().lower() in lateral_map:
-                    expression_sql = lateral_map[expression_sql.strip().lower()]
-
-                target_col = alias.lower()
-                db_t, schema_t, name_t = lookup[target_table]
-                col_lineage = catalog[db_t][schema_t][name_t]["column_lineage"]
-
-                # Сохраняем выражение СРАЗУ, чтобы Вариант 1 мог его проанализировать
-                if target_col not in col_lineage:
-                    col_lineage[target_col] = {"expression": expression_sql, "sources": []}
-                else:
-                    col_lineage[target_col]["expression"] = expression_sql
-
-                # Собираем источники ИЗ КАЖДОЙ ветки UNION (не только из первой).
-                # Каждая ветка имеет свой alias_map и свой WITH-scope.
-                source_columns = []
-                for bi in branch_infos:
-                    if isinstance(bi, str):
-                        continue
-                    branch = bi['select']
-                    effective_alias_map = bi['alias_map']
-                    if i >= len(branch.selects):
-                        continue
-                    branch_item = branch.selects[i]
-                    if isinstance(branch_item, exp.Alias):
-                        branch_raw = branch_item.this
-                    else:
-                        branch_raw = branch_item
-                    # Имя колонки для lineage() берём из текущей ветки
-                    branch_alias = branch_item.alias_or_name or alias
-
-                    found = False
-                    # ПРЯМОЕ разрешение ссылок на CTE/подзапрос с UNION-телом.
-                    # Листья lineage() для такого случая квалифицируются веточным алиасом
-                    # (напр. 'cc.client_id' при переиспользуемом 'cc' в обеих ветках),
-                    # и глобальный alias_mapping затирает первую ветку последней.
-                    # Поэтому для ссылок на union-подзапрос/CTE источники собираем через
-                    # _resolve_cte_source_column (ветка = свой alias_map). Это авторитетно:
-                    # если источников нет (все ветки — константы) — walk не запускаем.
-                    try:
-                        base_item = branch_item.this if isinstance(branch_item, exp.Alias) else branch_item
-                        if isinstance(base_item, exp.Column) and base_item.table:
-                            union_ref = None
-                            cte_ref_info = effective_cte.get(base_item.table.lower())
-                            if cte_ref_info:
-                                cte_ref_body = cte_ref_info.get('select')
-                                if isinstance(cte_ref_body, exp.Union) or len(_get_union_selects(cte_ref_body)) > 1:
-                                    union_ref = base_item.table.lower()
-                            if union_ref:
-                                for resolved_cte in _resolve_cte_source_column(union_ref, base_item.name or alias, effective_cte, lookup, default_db):
-                                    source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
-                                    found = True
-                                continue
-                    except Exception:
-                        pass
-
-                    try:
-                        node = lineage(branch_alias, branch, schema=sqlglot_schema, dialect="postgres")
-                        # Если qualify сломался на уровне всего запроса, lineage может вернуть корень без downstream
-                        if not node.downstream:
-                            node_fallback = lineage(branch_alias, branch, dialect="postgres")
-                            if node_fallback.downstream:
-                                node = node_fallback
-
-                        for n in node.walk():
-                            if not n.downstream:
-                                clean_name = n.name.replace('"', '').replace("'", "")
-                                col_name = None
-                                src_table = None
-
-                                if '.' in clean_name:
-                                    parts = clean_name.split('.')
-                                    col_name = parts[-1]
-                                    table_candidate = parts[-2].lower()
-
-                                    if table_candidate in effective_alias_map:
-                                        src_table = effective_alias_map[table_candidate]
-                                    elif table_candidate in effective_cte:
-                                        # CTE/подзапрос может содержать UNION — несколько источников (по ветке)
-                                        for resolved_cte in _resolve_cte_source_column(table_candidate, col_name, effective_cte, lookup, default_db):
-                                            source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
-                                            found = True
-                                        continue
-                                    else:
-                                        cand_db = parts[-3].lower() if len(parts) >= 3 and parts[-3].lower() in ("ods", "dds", "dm") else None
-                                        matched = False
-                                        if cand_db:
-                                            for tid in lookup.keys():
-                                                tid_parts = tid.split('.')
-                                                if len(tid_parts) == 3 and tid_parts[0] == cand_db and tid_parts[2] == table_candidate:
-                                                    src_table = tid
-                                                    matched = True
-                                                    break
-                                        if not matched:
-                                            for tid in lookup.keys():
-                                                if tid.split('.')[-1] == table_candidate:
-                                                    src_table = tid
-                                                    break
-                                else:
-                                    col_name = clean_name
-                                    if hasattr(n, 'source') and isinstance(n.source, exp.Table):
-                                        src_table = _get_table_id(n.source, default_db)
-                                    elif hasattr(n, 'expression') and isinstance(n.expression, exp.Column):
-                                        # Реальная колонка-источник (не алиас вывода типа client_name)
-                                        col_name = n.expression.name
-                                        if n.expression.table:
-                                            tbl_ref = n.expression.table.lower()
-                                            if tbl_ref in effective_alias_map:
-                                                src_table = effective_alias_map.get(tbl_ref)
-                                            elif tbl_ref in effective_cte:
-                                                for resolved_cte in _resolve_cte_source_column(tbl_ref, col_name, effective_cte, lookup, default_db):
-                                                    source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
-                                                    found = True
-                                                continue
-                                            else:
-                                                for tid in lookup.keys():
-                                                    if tid.split('.')[-1] == tbl_ref:
-                                                        src_table = tid
-                                                        break
-
-                                if src_table:
-                                    source_columns.append({"table": src_table, "column": col_name or "*"})
-                                    found = True
-                    except Exception:
-                        pass
-
-                    # FALLBACK для этой ветки: если lineage не нашел колонок — ищем в самом выражении
-                    if not found and branch_raw:
-                        try:
-                            for col_node in branch_raw.find_all(exp.Column):
-                                col_name = col_node.name
-                                col_table_alias = col_node.table.lower() if col_node.table else None
-                                src_table = None
-                                cte_appended = False
-
-                                if col_table_alias:
-                                    if col_table_alias in effective_alias_map:
-                                        src_table = effective_alias_map[col_table_alias]
-                                    elif col_table_alias in effective_cte:
-                                        for resolved_cte in _resolve_cte_source_column(col_table_alias, col_name, effective_cte, lookup, default_db):
-                                            source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1]})
-                                            found = True
-                                        cte_appended = True
-                                    else:
-                                        for tid in lookup.keys():
-                                            if tid.split('.')[-1] == col_table_alias:
-                                                src_table = tid
-                                                break
-                                if src_table and col_name and not cte_appended:
-                                    source_columns.append({"table": src_table, "column": col_name})
-                                    found = True
-                        except Exception:
-                            pass
-
-                if source_columns:
-                    for sc in source_columns:
-                        tbl_key = sc["table"]
-                        if tbl_key in lookup:
-                            db_s, schema_s, name_s = lookup[tbl_key]
-                            src_tbl_str = f"{db_s}.{schema_s}.{name_s}"
-                        else:
-                            src_tbl_str = tbl_key
-                        entry = {"source_table": src_tbl_str, "source_column": sc["column"]}
-                        if entry not in col_lineage[target_col]["sources"]:
-                            col_lineage[target_col]["sources"].append(entry)
-        except Exception as e:
-            print(f"   [Column Lineage Warning] Ошибка расчета для {target_table}: {e}")
+        sql = (item.get("query") or "").strip()
+        if not sql:
             continue
+        filtered_items.append(item)
+
+    skipped = total_queries - len(filtered_items)
+    if skipped > 0:
+        print(f"   - Отфильтровано {skipped} ручных справочников ref_manual_* (к обработке: {len(filtered_items)})")
+
+    num_items = len(filtered_items)
+    cpu_cores = os.cpu_count() or 1
+    max_workers = min(cpu_cores, 16) if num_items > 5 and cpu_cores > 1 else 1
+
+    results = []
+    init_args = (lookup, schema_dict, schema_lookahead, table_columns_map)
+
+    if max_workers > 1:
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=max_workers,
+                initializer=_init_column_lineage_worker,
+                initargs=init_args
+            ) as executor:
+                chunksize = max(1, num_items // (max_workers * 4))
+                results = list(executor.map(_analyze_single_query_lineage, filtered_items, chunksize=chunksize))
+        except (Exception, RuntimeError) as e:
+            print(f"   [Column Lineage Warning] Ошибка параллельного пула: {e}. Переключение на однопоточный режим.")
+            _init_column_lineage_worker(*init_args)
+            results = [_analyze_single_query_lineage(item) for item in filtered_items]
+    else:
+        _init_column_lineage_worker(*init_args)
+        results = [_analyze_single_query_lineage(item) for item in filtered_items]
+
+    # Слияние результатов в catalog
+    for target_table, q_col_lineage, warning_msg in results:
+        if warning_msg:
+            print(warning_msg)
+        if not target_table or not q_col_lineage or target_table not in lookup:
+            continue
+
+        db, schema, table = lookup[target_table]
+        table_obj = catalog[db][schema][table]
+        table_col_lineage = table_obj.setdefault("column_lineage", {})
+
+        for col, col_data in q_col_lineage.items():
+            if col not in table_col_lineage:
+                table_col_lineage[col] = {
+                    "sources": list(col_data.get("sources", [])),
+                    "expression": col_data.get("expression")
+                }
+            else:
+                existing_sources = table_col_lineage[col].setdefault("sources", [])
+                for src in col_data.get("sources", []):
+                    if src not in existing_sources:
+                        existing_sources.append(src)
+                if not table_col_lineage[col].get("expression") and col_data.get("expression"):
+                    table_col_lineage[col]["expression"] = col_data["expression"]
+
     return catalog
+
 
 
 def _is_constant_expression(expression_sql: str) -> bool:

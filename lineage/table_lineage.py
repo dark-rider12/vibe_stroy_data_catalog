@@ -33,6 +33,8 @@ def _get_table_id(table_exp, default_db: str = "") -> str:
     """
     if not table_exp:
         return ""
+    if isinstance(table_exp, exp.Schema):
+        table_exp = table_exp.this
 
     db     = (table_exp.catalog or "").lower()
     schema = (table_exp.db      or "").lower()
