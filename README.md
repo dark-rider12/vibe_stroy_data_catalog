@@ -1,6 +1,5 @@
 
 https://github.com/user-attachments/assets/66e93ee8-b749-4132-bc71-f2d502e2ea00
-Uploading Пост 2 Публ эксперимент.mp4…
 
 # 🚀 Vibe Stroy Data Catalog (DWH Data Catalog Generator)
 
