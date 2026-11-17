@@ -1,3 +1,7 @@
+
+https://github.com/user-attachments/assets/66e93ee8-b749-4132-bc71-f2d502e2ea00
+Uploading Пост 2 Публ эксперимент.mp4…
+
 # 🚀 Vibe Stroy Data Catalog (DWH Data Catalog Generator)
 
 [![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
