@@ -1267,25 +1267,35 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
     fromKeyCols.push(idCol);
   }
 
-  // Хелпер сопоставления колонок ключа для присоединенной таблицы
-  const getMatchingKeySelect = (targetAlias, targetTable) => {
-    return fromKeyCols.map(kCol => {
+  // Хелпер прямого сопоставления колонок ключа для присоединенной таблицы
+  const getDirectKeySelect = (targetAlias, targetTable) => {
+    const targetCols = getTableColumns(targetTable, catalogData).map(c => c.toLowerCase());
+    const matchedParts = [];
+
+    for (const kCol of fromKeyCols) {
+      let found = null;
       // 1. Ищем прямое равенство в условиях JOIN
       for (const eq of equalities) {
         if (eq.leftAlias === targetAlias.toLowerCase() && eq.rightAlias === fromAlias.toLowerCase() && eq.rightCol === kCol) {
-          return eq.leftCol === kCol ? eq.leftCol : `${eq.leftCol} AS ${kCol}`;
+          found = eq.leftCol === kCol ? eq.leftCol : `${eq.leftCol} AS ${kCol}`;
+          break;
         }
         if (eq.rightAlias === targetAlias.toLowerCase() && eq.leftAlias === fromAlias.toLowerCase() && eq.leftCol === kCol) {
-          return eq.rightCol === kCol ? eq.rightCol : `${eq.rightCol} AS ${kCol}`;
+          found = eq.rightCol === kCol ? eq.rightCol : `${eq.rightCol} AS ${kCol}`;
+          break;
         }
       }
       // 2. Проверяем наличие колонки с таким же именем в целевой таблице
-      const targetCols = getTableColumns(targetTable, catalogData).map(c => c.toLowerCase());
-      if (targetCols.includes(kCol.toLowerCase())) {
-        return kCol;
+      if (!found && targetCols.includes(kCol.toLowerCase())) {
+        found = kCol;
       }
-      return kCol;
-    }).join(", ");
+      if (!found) {
+        return null; // не все ключевые колонки присутствуют напрямую
+      }
+      matchedParts.push(found);
+    }
+
+    return matchedParts.join(", ");
   };
 
   const lines = [];
@@ -1300,13 +1310,60 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
   eventQueries.push(`    UNION`);
   eventQueries.push(`    SELECT ${fromKeySelect}, dwh_end_date   AS change_dt FROM ${fromFull}`);
 
+  // Карта элементов плана для поиска цепочки предков
+  const planByKey = new Map();
+  planByKey.set(getTableKey(fromTable), { table: fromTable, alias: fromAlias, isFrom: true });
+  for (const item of joinPlan) {
+    planByKey.set(getTableKey(item.table), item);
+  }
+
   for (const j of joinPlan) {
     const jFull = formatTableReferenceForTarget(j.table, effectiveTargetDb);
-    const jKeySelect = getMatchingKeySelect(j.alias, j.table);
-    eventQueries.push(`    UNION`);
-    eventQueries.push(`    SELECT ${jKeySelect}, dwh_start_date AS change_dt FROM ${jFull}`);
-    eventQueries.push(`    UNION`);
-    eventQueries.push(`    SELECT ${jKeySelect}, dwh_end_date   AS change_dt FROM ${jFull}`);
+    const directKeySelect = getDirectKeySelect(j.alias, j.table);
+
+    if (directKeySelect) {
+      eventQueries.push(`    UNION`);
+      eventQueries.push(`    SELECT ${directKeySelect}, dwh_start_date AS change_dt FROM ${jFull}`);
+      eventQueries.push(`    UNION`);
+      eventQueries.push(`    SELECT ${directKeySelect}, dwh_end_date   AS change_dt FROM ${jFull}`);
+    } else {
+      // Таблица не содержит напрямую мастер-ключ.
+      // Поднимаемся по дереву Join Tree до ближайшего предка с ключом.
+      let curr = j;
+      const joinClauses = [];
+      let resolvedAncestor = null;
+
+      while (curr && !curr.isFrom) {
+        const parentKey = curr.parentTableKey;
+        const parentNode = planByKey.get(parentKey);
+        if (!parentNode) break;
+
+        const parentFull = formatTableReferenceForTarget(parentNode.table, effectiveTargetDb);
+        joinClauses.push(`    JOIN ${parentFull} ${parentNode.alias}\n        ON ${curr.condition}`);
+
+        const parentDirectKey = getDirectKeySelect(parentNode.alias, parentNode.table);
+        if (parentDirectKey || parentNode.isFrom) {
+          resolvedAncestor = parentNode;
+          break;
+        }
+        curr = parentNode;
+      }
+
+      if (resolvedAncestor) {
+        const ancestorKeySelect = fromKeyCols.map(k => `${resolvedAncestor.alias}.${k}`).join(", ");
+        const joinSql = joinClauses.join("\n");
+        eventQueries.push(`    UNION`);
+        eventQueries.push(`    SELECT ${ancestorKeySelect}, ${j.alias}.dwh_start_date AS change_dt\n    FROM ${jFull} ${j.alias}\n${joinSql}`);
+        eventQueries.push(`    UNION`);
+        eventQueries.push(`    SELECT ${ancestorKeySelect}, ${j.alias}.dwh_end_date   AS change_dt\n    FROM ${jFull} ${j.alias}\n${joinSql}`);
+      } else {
+        const fallbackKey = fromKeyCols.map(k => `NULL AS ${k}`).join(", ");
+        eventQueries.push(`    UNION`);
+        eventQueries.push(`    SELECT ${fallbackKey}, dwh_start_date AS change_dt FROM ${jFull}`);
+        eventQueries.push(`    UNION`);
+        eventQueries.push(`    SELECT ${fallbackKey}, dwh_end_date   AS change_dt FROM ${jFull}`);
+      }
+    }
   }
 
   lines.push(eventQueries.join("\n"));
