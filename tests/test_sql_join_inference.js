@@ -344,6 +344,27 @@ function runTest() {
     throw new Error("buildHierarchyTree: в flatTreeList должно быть 3 узла");
   }
 
+  // 11. Тест исключения технических полей (source_system_id, etl_process_id) из условий JOIN
+  const techTables = [
+    { db: "dds", schema: "core", table: "transaction_detail" },
+    { db: "dds", schema: "core", table: "manager_detail" }
+  ];
+  const techPlan = buildJoinPlan(techTables, { catalogData });
+  const techJoin = techPlan.joinPlan[0];
+
+  if (!techJoin) {
+    throw new Error("Ожидался план соединения для manager_detail");
+  }
+  if (techJoin.condition.includes("source_system_id") || techJoin.condition.includes("etl_process_id")) {
+    throw new Error(`Технические поля (source_system_id / etl_process_id) не должны предлагаться для JOIN! Получено: ${techJoin.condition}`);
+  }
+  if (!techJoin.condition.includes("/* TODO")) {
+    throw new Error(`Для таблиц без общих бизнес-ключей ожидалось условие TODO, получено: ${techJoin.condition}`);
+  }
+  if (techJoin.availableSources.length !== 0) {
+    throw new Error(`Для таблиц без бизнес-связей не должно предлагаться источников, получено: ${techJoin.availableSources.length}`);
+  }
+
   console.log("✓ Чистый SELECT формируется без CTAS и без шапки");
   console.log("✓ Таблицы из одной БД dds остаются локальными (без ext_*)");
   console.log("✓ Автоматический переход dds.core -> dm.ext_dds при кросс-базовом запросе (dm + dds)");
@@ -355,6 +376,7 @@ function runTest() {
   console.log("✓ Условия с чужими алиасами сохраняются без принудительной очистки");
   console.log("✓ При добавлении зависимой таблицы в шаблон статус становится чистым");
   console.log("✓ Временные таблицы (tmp_*) полностью отфильтровываются из ранжирования и подсказок");
+  console.log("✓ Технические поля (source_system_id, etl_process_id и др.) исключены из предложений JOIN");
   console.log("✓ ВСЕ ПРОВЕРКИ JOIN INFERENCE ПРОЙДЕНЫ УСПЕШНО");
   console.log("======================================================");
 }

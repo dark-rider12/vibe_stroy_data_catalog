@@ -242,7 +242,7 @@
                     <span>Зачем нужна нарезка интервалов?</span>
                 </div>
                 <p>
-                    В DWH версионные сущности (SCD Type 2) изменяются <strong>в разное время</strong>: например, у клиента есть счёт (сменил тариф <em>10 мая</em>) и привязанная карта (перевыпущена <em>25 июня</em>).
+                    В DWH версионные сущности (SCD Type 2) изменяются <strong>в разное время</strong>: например, у клиента (<code>clients</code>) сменился статус или сегмент <em>10 мая</em>, а по его договору (<code>contracts</code>) обновились условия или ставка <em>25 июня</em>.
                 </p>
                 <p>
                     При классическом <code>LEFT JOIN</code> периоды действия версий не совпадают, что приводит к <strong>дублированию строк</strong> или смещению исторических срезов. Режим <strong>Timeline Slicing</strong> автоматически выравнивает хронологию обеих таблиц в единую бесшовную шкалу.
@@ -257,17 +257,17 @@
                 </div>
                 <div class="tb-help-diagram-box">
                     <div class="tb-diagram-row">
-                        <span class="tb-diagram-label">Счёт (account_detail):</span>
+                        <span class="tb-diagram-label">Клиент (clients):</span>
                         <div class="tb-diagram-bars">
-                            <span class="tb-diagram-bar tb-bar-account-1">v1: Базовый (01.01 — 10.05)</span>
-                            <span class="tb-diagram-bar tb-bar-account-2">v2: Премиум (10.05 — 9999)</span>
+                            <span class="tb-diagram-bar tb-bar-client-1">v1: Стандарт (01.01 — 10.05)</span>
+                            <span class="tb-diagram-bar tb-bar-client-2">v2: VIP (10.05 — 9999)</span>
                         </div>
                     </div>
                     <div class="tb-diagram-row">
-                        <span class="tb-diagram-label">Карта (card_detail):</span>
+                        <span class="tb-diagram-label">Договор (contracts):</span>
                         <div class="tb-diagram-bars">
-                            <span class="tb-diagram-bar tb-bar-card-1">v1: Gold (01.01 — 25.06)</span>
-                            <span class="tb-diagram-bar tb-bar-card-2">v2: Platinum (25.06 — 9999)</span>
+                            <span class="tb-diagram-bar tb-bar-contract-1">v1: Базовый (01.01 — 25.06)</span>
+                            <span class="tb-diagram-bar tb-bar-contract-2">v2: Пролонгация (25.06 — 9999)</span>
                         </div>
                     </div>
                     <div class="tb-diagram-divider"></div>
@@ -277,17 +277,17 @@
                             <div class="tb-diagram-slice tb-slice-1">
                                 <strong>Срез 1</strong>
                                 <span>01.01 — 10.05</span>
-                                <small>Базовый + Gold</small>
+                                <small>Стандарт + Базовый</small>
                             </div>
                             <div class="tb-diagram-slice tb-slice-2">
                                 <strong>Срез 2</strong>
                                 <span>10.05 — 25.06</span>
-                                <small>Премиум + Gold</small>
+                                <small>VIP + Базовый</small>
                             </div>
                             <div class="tb-diagram-slice tb-slice-3">
                                 <strong>Срез 3 ★</strong>
                                 <span>25.06 — 9999</span>
-                                <small>Премиум + Platinum</small>
+                                <small>VIP + Пролонгация</small>
                             </div>
                         </div>
                     </div>
@@ -334,7 +334,7 @@
                     <tbody>
                         <tr>
                             <td><code>client_id</code> (ключ)</td>
-                            <td><code>i.client_id</code> — берётся из ведущей таблицы интервалов (гарантированно <code>NOT NULL</code>, даже если клиент зарегистрирован позже открытия счёта).</td>
+                            <td><code>i.client_id</code> — берётся из ведущей таблицы интервалов (гарантированно <code>NOT NULL</code>, даже если договор был заключён раньше заведения карточки клиента).</td>
                         </tr>
                         <tr>
                             <td><code>source_system_id</code></td>
@@ -365,7 +365,7 @@
                 <div class="tb-help-tip-box" style="margin-top: 12px; padding: 10px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 6px; font-size: 11.5px; line-height: 1.45; color: #1e40af; display: flex; flex-direction: column; gap: 8px;">
                     <div>
                         <strong>💡 Почему бизнес-ключ берётся из <code>i.client_id</code>, а не из <code>c.client_id</code>?</strong><br>
-                        Если счёт был открыт раньше появления записи о клиенте (или при рассинхронизации источников), <code>LEFT JOIN</code> по клиенту вернёт <code>NULL</code>. Выборка <code>i.client_id</code> гарантирует, что первичный ключ витрины никогда не станет <code>NULL</code>.
+                        Если договор был заключён раньше заведения карточки клиента (или при рассинхронизации источников), <code>LEFT JOIN</code> по клиенту вернёт <code>NULL</code>. Выборка <code>i.client_id</code> гарантирует, что первичный ключ витрины никогда не станет <code>NULL</code>.
                     </div>
                     <div>
                         <strong>💡 Зачем нужен фильтр <code>WHERE (...dwh_start_date IS NOT NULL)</code>?</strong><br>

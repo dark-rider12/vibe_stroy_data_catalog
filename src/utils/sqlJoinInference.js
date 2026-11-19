@@ -72,6 +72,62 @@ export function getTableKey(item) {
   return "";
 }
 
+/**
+ * Технические поля хранилища, которые не являются бизнес-ключами
+ * и не должны предлагаться в качестве самостоятельных условий JOIN.
+ */
+export const TECHNICAL_COLUMN_NAMES = new Set([
+  "source_system_id",
+  "source_system_cd",
+  "system_id",
+  "is_active",
+  "is_deleted",
+  "dwh_start_date",
+  "dwh_end_date",
+  "etl_process_id",
+  "load_dttm",
+  "load_date"
+]);
+
+/**
+ * Проверяет, состоит ли условие JOIN исключительно из сравнения технических полей
+ * (например, td.source_system_id = md.source_system_id).
+ * @param {string} condition 
+ * @returns {boolean}
+ */
+export function isPurelyTechnicalCondition(condition) {
+  if (!condition) return false;
+  const clean = condition.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  if (!clean) return false;
+
+  const clauses = clean.split(/\s+AND\s+/i);
+  if (clauses.length === 0) return false;
+
+  const sqlKeywords = new Set([
+    "and", "or", "on", "is", "not", "null", "true", "false",
+    "case", "when", "then", "else", "end", "coalesce", "cast"
+  ]);
+
+  let totalColComparisons = 0;
+  let technicalColComparisons = 0;
+
+  for (const clause of clauses) {
+    const m = clause.match(/(?:[a-zA-Z0-9_{}]+\.)?([a-zA-Z0-9_]+)\s*=\s*(?:[a-zA-Z0-9_{}]+\.)?([a-zA-Z0-9_]+)/i);
+    if (m) {
+      const colLeft = m[1].toLowerCase();
+      const colRight = m[2].toLowerCase();
+      if (!sqlKeywords.has(colLeft) && !sqlKeywords.has(colRight)) {
+        totalColComparisons++;
+        if (TECHNICAL_COLUMN_NAMES.has(colLeft) || TECHNICAL_COLUMN_NAMES.has(colRight)) {
+          technicalColComparisons++;
+        }
+      }
+    }
+  }
+
+  return totalColComparisons > 0 && totalColComparisons === technicalColComparisons;
+}
+
 // ============================================================================
 // БАЗА ЗНАНИЙ JOIN (Knowledge Graph)
 // ============================================================================
@@ -293,6 +349,10 @@ export class CommonKeyMatchStrategy {
 
     for (const colA of colsA) {
       const nameLower = colA.name.toLowerCase();
+      // Исключаем чисто технические поля (source_system_id, etl_process_id и др.)
+      if (TECHNICAL_COLUMN_NAMES.has(nameLower)) {
+        continue;
+      }
       if (setB.has(nameLower)) {
         const isId = prioritySuffixes.some(s => nameLower.endsWith(s)) || nameLower === "id";
         if (isId) {
@@ -735,10 +795,11 @@ export function buildJoinPlan(tables, options = {}) {
 
         const directEdges = knowledgeGraph.getDirectEdges(target, candidate) || [];
         for (const edge of directEdges) {
-          // Исключаем временные таблицы и витрины (tmp_*) из кандидатов умного ранжирования
+          // Исключаем временные таблицы (tmp_*) и чисто технические условия (source_system_id и т.д.)
           if (isTemporaryTable(edge.sourceMart) ||
             isTemporaryTable(edge.originalLeftTable) ||
-            isTemporaryTable(edge.originalRightTable)) {
+            isTemporaryTable(edge.originalRightTable) ||
+            isPurelyTechnicalCondition(edge.condition)) {
             continue;
           }
           candidateEdges.push({ edge, target });
@@ -746,7 +807,7 @@ export function buildJoinPlan(tables, options = {}) {
 
         if (commonKeyStrategy && !isTemporaryTable(target) && !isTemporaryTable(candidate)) {
           const keyMatch = commonKeyStrategy.findJoin(target, candidate, catalogData);
-          if (keyMatch) {
+          if (keyMatch && !isPurelyTechnicalCondition(keyMatch.condition)) {
             candidateEdges.push({ edge: keyMatch, target });
           }
         }
@@ -755,7 +816,12 @@ export function buildJoinPlan(tables, options = {}) {
         if (userSelectedParentKey && targetKey === userSelectedParentKey && candidateEdges.length === 0) {
           const targetCols = getTableColumns(target, catalogData);
           const candidateCols = getTableColumns(candidate, catalogData);
-          const matchCol = targetCols.find(tc => candidateCols.includes(tc) && (tc.endsWith("_id") || tc.endsWith("_rk") || tc.endsWith("_code")));
+          const matchCol = targetCols.find(tc => {
+            const low = tc.toLowerCase();
+            return candidateCols.includes(tc) &&
+              !TECHNICAL_COLUMN_NAMES.has(low) &&
+              (low.endsWith("_id") || low.endsWith("_rk") || low.endsWith("_code"));
+          });
           const cond = matchCol
             ? `${target.table}.${matchCol} = ${candidate.table}.${matchCol}`
             : `${target.table}.${target.table}_id = ${candidate.table}.${candidate.table}_id`;
@@ -1116,15 +1182,6 @@ export function determineTargetDb(tables, baseTableKey = null) {
 
   return tables[0]?.db?.toLowerCase() || "dm";
 }
-
-const TECHNICAL_COLUMN_NAMES = new Set([
-  "source_system_id",
-  "is_active",
-  "is_deleted",
-  "dwh_start_date",
-  "dwh_end_date",
-  "etl_process_id"
-]);
 
 /**
  * Проверяет, содержит ли таблица колонки dwh_start_date и dwh_end_date.
