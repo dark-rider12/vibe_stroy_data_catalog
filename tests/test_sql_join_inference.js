@@ -384,6 +384,30 @@ function runTest() {
     throw new Error("В timeline_events должен быть построен транзитивный JOIN для получения account_id для account_property_detail");
   }
 
+  // 13. Тест разделения на чистый ключ и полное условие (Вариант 3)
+  const filterTables = [
+    { db: "ods", schema: "core", table: "crm_client" },
+    { db: "ods", schema: "core", table: "crm_client_document" }
+  ];
+  const planFilters = buildJoinPlan(filterTables, { catalogData });
+  const docJoin = planFilters.joinPlan[0];
+
+  const cleanOption = docJoin.availableSources.find(s => s.id.endsWith(":clean"));
+  const fullOption = docJoin.availableSources.find(s => !s.id.endsWith(":clean") && s.id.includes("master_account_party"));
+
+  if (!cleanOption) {
+    throw new Error("В availableSources должен присутствовать вариант чистого ключа (:clean)");
+  }
+  if (!fullOption) {
+    throw new Error("В availableSources должен присутствовать исходный полный вариант условия");
+  }
+  if (!docJoin.condition.includes("client_id") || docJoin.condition.includes("is_active")) {
+    throw new Error(`По умолчанию должно выбираться чистое ключевое равенство без is_active! Получено: ${docJoin.condition}`);
+  }
+  if (!cleanOption.isSelected) {
+    throw new Error("Вариант чистого ключа должен быть выбран по умолчанию");
+  }
+
   console.log("✓ Чистый SELECT формируется без CTAS и без шапки");
   console.log("✓ Таблицы из одной БД dds остаются локальными (без ext_*)");
   console.log("✓ Автоматический переход dds.core -> dm.ext_dds при кросс-базовом запросе (dm + dds)");
@@ -397,6 +421,7 @@ function runTest() {
   console.log("✓ Временные таблицы (tmp_*) полностью отфильтровываются из ранжирования и подсказок");
   console.log("✓ Технические поля (source_system_id, etl_process_id и др.) исключены из предложений JOIN");
   console.log("✓ Транзитивное связывание ключа в timeline_events через JOIN-цепочки работает корректно");
+  console.log("✓ Двойной выбор связей (чистый ключ vs полное условие с фильтрами) работает корректно");
   console.log("✓ ВСЕ ПРОВЕРКИ JOIN INFERENCE ПРОЙДЕНЫ УСПЕШНО");
   console.log("======================================================");
 }

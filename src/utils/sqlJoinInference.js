@@ -128,6 +128,98 @@ export function isPurelyTechnicalCondition(condition) {
   return totalColComparisons > 0 && totalColComparisons === technicalColComparisons;
 }
 
+/**
+ * Разбивает условие JOIN на отдельные предикаты по оператору AND.
+ * @param {string} condition 
+ * @returns {Array<string>}
+ */
+export function splitConditionClauses(condition) {
+  if (!condition) return [];
+  const clean = condition.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  return clean.split(/\s+AND\s+/i).map(c => c.trim()).filter(Boolean);
+}
+
+/**
+ * Проверяет, является ли выражение литералом (строка, число, boolean, null, date-функции).
+ * @param {string} str 
+ * @returns {boolean}
+ */
+export function isLiteralOrConstant(str) {
+  if (!str) return false;
+  const s = str.trim().toLowerCase();
+  if (/^'.*'$/.test(s)) return true;
+  if (/^\d+(\.\d+)?$/.test(s)) return true;
+  if (["true", "false", "null", "current_date", "now()", "current_timestamp"].includes(s)) return true;
+  return false;
+}
+
+/**
+ * Извлекает чистое ключевое равенство (Clean Key) из составного условия JOIN,
+ * отсекая технические поля (is_active и др.), литеральные фильтры и зависимости от третьих таблиц.
+ * Возвращает строку очищенного условия или null, если условие не требовало очистки.
+ * 
+ * @param {string} condition 
+ * @param {string} leftAlias 
+ * @param {string} rightAlias 
+ * @param {string} leftTable 
+ * @param {string} rightTable 
+ * @returns {string|null}
+ */
+export function extractCleanKeyCondition(condition, leftAlias, rightAlias, leftTable, rightTable) {
+  const clauses = splitConditionClauses(condition);
+  if (clauses.length <= 1) return null;
+
+  const validClauses = [];
+  const eqRegex = /^(?:([a-zA-Z0-9_{}]+)\.)?([a-zA-Z0-9_]+)\s*=\s*(?:([a-zA-Z0-9_{}]+)\.)?([a-zA-Z0-9_]+)$/i;
+
+  const leftAliases = new Set([
+    leftAlias?.toLowerCase(),
+    leftTable?.toLowerCase(),
+    normalizeTableName(leftTable)
+  ].filter(Boolean));
+
+  const rightAliases = new Set([
+    rightAlias?.toLowerCase(),
+    rightTable?.toLowerCase(),
+    normalizeTableName(rightTable)
+  ].filter(Boolean));
+
+  for (const clause of clauses) {
+    const cleanClause = clause.replace(/--.*$/, "").trim();
+    const eqIdx = cleanClause.indexOf("=");
+    if (eqIdx === -1) continue;
+    const leftPart = cleanClause.slice(0, eqIdx).trim();
+    const rightPart = cleanClause.slice(eqIdx + 1).trim();
+
+    if (isLiteralOrConstant(leftPart) || isLiteralOrConstant(rightPart)) continue;
+    if (cleanClause.toLowerCase().includes(" is ") || cleanClause.toLowerCase().includes(" in ")) continue;
+
+    const m = eqRegex.exec(cleanClause);
+    if (!m) continue;
+
+    const a1 = (m[1] || "").toLowerCase();
+    const c1 = m[2].toLowerCase();
+    const a2 = (m[3] || "").toLowerCase();
+    const c2 = m[4].toLowerCase();
+
+    // Пропускаем технические поля (is_active, source_system_id и т.д.)
+    if (TECHNICAL_COLUMN_NAMES.has(c1) || TECHNICAL_COLUMN_NAMES.has(c2)) continue;
+
+    // Проверяем, что один операнд принадлежит left, а другой right
+    const oneLeftOneRight = (leftAliases.has(a1) && rightAliases.has(a2)) ||
+                            (leftAliases.has(a2) && rightAliases.has(a1));
+
+    if (oneLeftOneRight || (!a1 && !a2) || (!leftAlias && !rightAlias)) {
+      validClauses.push(cleanClause);
+    }
+  }
+
+  if (validClauses.length > 0 && validClauses.length < clauses.length) {
+    return validClauses.join(" AND ");
+  }
+  return null;
+}
+
 // ============================================================================
 // БАЗА ЗНАНИЙ JOIN (Knowledge Graph)
 // ============================================================================
@@ -802,7 +894,41 @@ export function buildJoinPlan(tables, options = {}) {
             isPurelyTechnicalCondition(edge.condition)) {
             continue;
           }
-          candidateEdges.push({ edge, target });
+
+          const cleanCond = extractCleanKeyCondition(
+            edge.condition,
+            edge.originalLeftAlias,
+            edge.originalRightAlias,
+            edge.originalLeftTable || target.table,
+            edge.originalRightTable || candidate.table
+          );
+
+          if (cleanCond && cleanCond !== edge.condition) {
+            // Вариант 1: Чистый ключ (без лишних предикатов, выбирается по умолчанию)
+            candidateEdges.push({
+              edge: {
+                ...edge,
+                condition: cleanCond,
+                isCleanKey: true,
+                variantSuffix: ":clean",
+                originalCondition: edge.condition,
+                note: `Чистый ключ: ${cleanCond} (из ${edge.sourceMart || 'витрины'})`
+              },
+              target
+            });
+            // Вариант 2: Полное исходное условие из витрины со всеми фильтрами
+            candidateEdges.push({
+              edge: {
+                ...edge,
+                isCleanKey: false,
+                variantSuffix: ":full",
+                note: `Исходное условие из ${edge.sourceMart || 'витрины'}`
+              },
+              target
+            });
+          } else {
+            candidateEdges.push({ edge, target });
+          }
         }
 
         if (commonKeyStrategy && !isTemporaryTable(target) && !isTemporaryTable(candidate)) {
@@ -862,7 +988,12 @@ export function buildJoinPlan(tables, options = {}) {
         const missing = findMissingTables(item.edge, item.target, candidate, tables, catalogData);
         let score = scoreEdge(item.edge, item.target, candidate, tables, freq, missing);
 
-        const sourceId = item.edge.sourceMart || `heuristic_${item.edge.strategy}_${item.target.table}_${idx}`;
+        if (item.edge.isCleanKey) {
+          score += 25; // Приоритет чистому ключевому условию перед исходным с фильтрами
+        }
+
+        const baseId = item.edge.sourceMart || `heuristic_${item.edge.strategy}_${item.target.table}_${idx}`;
+        const sourceId = item.edge.isCleanKey ? `${baseId}:clean` : baseId;
         item.id = sourceId;
         item.missingTables = missing;
         item.frequency = freq;
@@ -873,7 +1004,12 @@ export function buildJoinPlan(tables, options = {}) {
         }
 
         // Если пользователь явно выбрал этот источник в UI
-        if (userSelectedChoice && (userSelectedChoice === sourceId || userSelectedChoice === item.edge.sourceMart)) {
+        const isUserMatch = userSelectedChoice && (
+          userSelectedChoice === sourceId ||
+          (!item.edge.isCleanKey && userSelectedChoice === item.edge.sourceMart) ||
+          (item.edge.isCleanKey && userSelectedChoice === `${item.edge.sourceMart}:clean`)
+        );
+        if (isUserMatch) {
           score += 10000;
           item.isUserSelected = true;
         }
@@ -917,7 +1053,11 @@ export function buildJoinPlan(tables, options = {}) {
         seenSources.add(item.id);
 
         let label = "";
-        if (item.edge.sourceMart) {
+        if (item.edge.isCleanKey) {
+          label = `${item.edge.sourceMart || item.edge.note} (чистый ключ)`;
+        } else if (item.edge.variantSuffix === ":full") {
+          label = `${item.edge.sourceMart || item.edge.note} (полное условие)`;
+        } else if (item.edge.sourceMart) {
           label = item.edge.sourceMart;
         } else if (item.edge.note) {
           label = item.edge.note;
@@ -926,8 +1066,12 @@ export function buildJoinPlan(tables, options = {}) {
         }
 
         let statusTag = "";
-        if (item.missingTables.length > 0) {
+        if (item.edge.isCleanKey) {
+          statusTag = `✓ чистый ключ`;
+        } else if (item.missingTables.length > 0) {
           statusTag = `⚠️ требует ${item.missingTables.map(m => m.table).join(", ")}`;
+        } else if (item.edge.variantSuffix === ":full") {
+          statusTag = `исходное с фильтрами`;
         } else if (item.frequency > 1) {
           statusTag = `✓ чистое, ${item.frequency} витрин`;
         } else {
@@ -968,7 +1112,7 @@ export function buildJoinPlan(tables, options = {}) {
       });
 
       let expSource = bestConnection.edge.sourceMart
-        ? `из скрипта ${bestConnection.edge.sourceMart}`
+        ? `из скрипта ${bestConnection.edge.sourceMart}${bestConnection.edge.isCleanKey ? " (чистый ключ)" : ""}`
         : (bestConnection.edge.note || "автоматический подбор");
       if (bestConnection.missingTables && bestConnection.missingTables.length > 0) {
         expSource += ` (требует таблицы: ${bestConnection.missingTables.map(m => m.table).join(", ")})`;
