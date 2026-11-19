@@ -408,6 +408,69 @@ function runTest() {
     throw new Error("Вариант чистого ключа должен быть выбран по умолчанию");
   }
 
+  // 14. Тест дедупликации выходных колонок в финальном SELECT режима Timeline Slicing (защита от SQL Error 42701)
+  const dedupTables = [
+    { db: "dds", schema: "core", table: "account_detail" },
+    { db: "dds", schema: "core", table: "account_property_group_detail" },
+    { db: "dds", schema: "core", table: "account_property_detail" }
+  ];
+  const dedupSql = generateSqlTemplate(dedupTables, {
+    catalogData,
+    enableTimelineSlicing: true
+  });
+
+  // Извлекаем только финальный блок SELECT перед FROM clean_intervals
+  const parts = dedupSql.split("FROM clean_intervals");
+  if (parts.length < 2) {
+    throw new Error("Не найден блок FROM clean_intervals в сгенерированном Timeline Slicing SQL");
+  }
+  const lastSelectIdx = parts[0].lastIndexOf("\nSELECT\n");
+  if (lastSelectIdx === -1) {
+    throw new Error("Не найден финальный SELECT перед FROM clean_intervals");
+  }
+  const selectBlock = parts[0].slice(lastSelectIdx + 8);
+  
+  // Собираем все выходные имена колонок (вида alias.colName, expr AS colName или i.colName)
+  const outColNames = [];
+  const lines = selectBlock.split("\n");
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("--")) continue;
+    // Удаляем комментарии и хвостовую запятую
+    const cleanLine = line.replace(/--.*$/, "").trim().replace(/,$/, "").trim();
+    const asMatch = cleanLine.match(/AS\s+([a-zA-Z0-9_]+)$/i);
+    if (asMatch) {
+      outColNames.push(asMatch[1].toLowerCase());
+    } else {
+      const colMatch = cleanLine.match(/(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)$/);
+      if (colMatch) {
+        outColNames.push(colMatch[1].toLowerCase());
+      }
+    }
+  }
+
+  // Проверяем уникальность всех имен
+  const seenNames = new Set();
+  const duplicates = [];
+  for (const name of outColNames) {
+    if (seenNames.has(name)) {
+      duplicates.push(name);
+    }
+    seenNames.add(name);
+  }
+
+  if (duplicates.length > 0) {
+    throw new Error(`Обнаружены дублирующиеся колонки в финальном SELECT: ${duplicates.join(", ")}`);
+  }
+
+  // Проверяем, что apgd.account_property_group_id присутствует, а apd.account_property_group_id не дублируется
+  if (!selectBlock.includes("apgd.account_property_group_id")) {
+    throw new Error("apgd.account_property_group_id должен присутствовать в финальном SELECT");
+  }
+  if (selectBlock.includes("apd.account_property_group_id")) {
+    throw new Error("apd.account_property_group_id не должен дублироваться в финальном SELECT");
+  }
+
   console.log("✓ Чистый SELECT формируется без CTAS и без шапки");
   console.log("✓ Таблицы из одной БД dds остаются локальными (без ext_*)");
   console.log("✓ Автоматический переход dds.core -> dm.ext_dds при кросс-базовом запросе (dm + dds)");
@@ -422,6 +485,7 @@ function runTest() {
   console.log("✓ Технические поля (source_system_id, etl_process_id и др.) исключены из предложений JOIN");
   console.log("✓ Транзитивное связывание ключа в timeline_events через JOIN-цепочки работает корректно");
   console.log("✓ Двойной выбор связей (чистый ключ vs полное условие с фильтрами) работает корректно");
+  console.log("✓ Сквозная дедупликация колонок в финальном SELECT (Timeline Slicing) предотвращает SQL Error 42701");
   console.log("✓ ВСЕ ПРОВЕРКИ JOIN INFERENCE ПРОЙДЕНЫ УСПЕШНО");
   console.log("======================================================");
 }

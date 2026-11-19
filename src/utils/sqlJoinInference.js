@@ -1538,29 +1538,40 @@ function generateTimelineSlicingTemplate(tables, plan, effectiveTargetDb, catalo
   lines.push("SELECT");
   const selectParts = [];
 
-  const keyColSet = new Set(fromKeyCols.map(k => k.toLowerCase()));
+  // Множество уже включенных в SELECT полей для исключения дубликатов (защита от SQL Error 42701)
+  const seenColNames = new Set(fromKeyCols.map(k => k.toLowerCase()));
+  // Резервируем имена технических полей, генерируемых в подвале блока SELECT
+  ["source_system_id", "is_active", "is_deleted", "dwh_start_date", "dwh_end_date", "etl_process_id"].forEach(c => {
+    seenColNames.add(c.toLowerCase());
+  });
 
   // 4.1. Ключевые поля сущности (берутся из ведущей таблицы интервалов i — гарантированно NOT NULL)
   selectParts.push("    -- Мастер-ключ сущности (из таблицы интервалов i, гарантированно NOT NULL):");
   fromKeyCols.forEach(k => selectParts.push(`    i.${k},`));
   selectParts.push("");
 
-  // 4.2. Бизнес-поля базовой таблицы (без технических SCD полей и ключевых полей)
-  const fromCols = getTableColumns(fromTable, catalogData)
-    .filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()) && !keyColSet.has(c.toLowerCase()));
+  // 4.2. Бизнес-поля базовой таблицы (без технических SCD полей и дубликатов)
+  const rawFromCols = getTableColumns(fromTable, catalogData);
+  const fromCols = rawFromCols.filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()) && !seenColNames.has(c.toLowerCase()));
   if (fromCols.length > 0) {
-    fromCols.forEach(c => selectParts.push(`    ${fromAlias}.${c},`));
-  } else if (getTableColumns(fromTable, catalogData).length === 0) {
+    fromCols.forEach(c => {
+      selectParts.push(`    ${fromAlias}.${c},`);
+      seenColNames.add(c.toLowerCase());
+    });
+  } else if (rawFromCols.length === 0) {
     selectParts.push(`    ${fromAlias}.*,`);
   }
 
-  // 4.3. Бизнес-поля присоединенных таблиц
+  // 4.3. Бизнес-поля присоединенных таблиц (без технических SCD полей и дубликатов)
   for (const j of joinPlan) {
-    const jCols = getTableColumns(j.table, catalogData)
-      .filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()) && !keyColSet.has(c.toLowerCase()));
+    const rawJCols = getTableColumns(j.table, catalogData);
+    const jCols = rawJCols.filter(c => !TECHNICAL_COLUMN_NAMES.has(c.toLowerCase()) && !seenColNames.has(c.toLowerCase()));
     if (jCols.length > 0) {
-      jCols.forEach(c => selectParts.push(`    ${j.alias}.${c},`));
-    } else if (getTableColumns(j.table, catalogData).length === 0) {
+      jCols.forEach(c => {
+        selectParts.push(`    ${j.alias}.${c},`);
+        seenColNames.add(c.toLowerCase());
+      });
+    } else if (rawJCols.length === 0) {
       selectParts.push(`    ${j.alias}.*,`);
     }
   }
