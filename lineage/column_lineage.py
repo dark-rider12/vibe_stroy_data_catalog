@@ -269,13 +269,13 @@ def _build_schema_lookahead(catalog: dict = None) -> str:
     return rf'(?!(?:{pattern})\.)'
 
 
-def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dict = None, lookup: dict = None, default_db: str = "", visited: set = None, schema_lookahead: str = "") -> str:
+def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dict = None, lookup: dict = None, default_db: str = "", visited: set = None, schema_lookahead: str = "", depth: int = 0) -> str:
     """
     Разворачивает ссылки на CTE в выражении.
     Обрабатывает как прямые имена CTE ("account_stats.col"),
     так и алиасы CTE ("ast.col" если JOIN account_stats ast).
     """
-    if not cte_map or not expression_sql:
+    if not cte_map or not expression_sql or depth > 60:
         return expression_sql
 
     if visited is None:
@@ -293,10 +293,10 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
 
     expr_lower = expression_sql.lower()
     for ref_name, cte_info in effective_map.items():
-        if ref_name in visited or ref_name not in expr_lower:
+        if ref_name not in expr_lower:
             continue
         cte_select = cte_info['select']
-        cte_alias_map = cte_info['alias_map']
+        cte_alias_map = cte_info.get('alias_map', {})
 
         # Ищем все вхождения "ref_name.something" в выражении
         pattern = re.compile(
@@ -306,8 +306,13 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
 
         def replace_cte_ref(m, _body=cte_select, _cte_info=cte_info, _current_ref=ref_name):
             col_ref = m.group(1).lower()
+            target_cte_name = _cte_info.get('name') or _current_ref
+            cycle_key = (target_cte_name, col_ref)
+            if cycle_key in visited:
+                return m.group(0)
+
             # Берём актуальный alias_map из cte_info (он мог быть обновлён рекурсивным проходом)
-            _amap = _cte_info['alias_map']
+            _amap = _cte_info.get('alias_map', {})
             # Для UNION/UNION ALL собираем выражение из КАЖДОЙ ветки с реальным оператором
             parts = _get_union_parts(_body)
             # parts = [Select, 'UNION ALL', Select, 'UNION ALL', Select, ...]
@@ -336,7 +341,7 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                 # ВАЖНО: проверяем tid_last in cte_map, а НЕ cte_key in cte_map!
                 # Если у реальной физической таблицы алиас совпал с именем CTE (напр. FROM real_table account_info),
                 # она не должна удаляться из branch_amap и считаться CTE.
-                branch_cte_aliases = {}
+                branch_cte_aliases = dict(_cte_info.get('cte_aliases', {}))
                 for cte_key in list(branch_amap.keys()):
                     tid_val = branch_amap[cte_key]
                     tid_last = tid_val.split('.')[-1].lower()
@@ -374,8 +379,8 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                             flags=re.IGNORECASE
                         )
                         inner_sql_lower = inner_sql.lower()
-                    next_visited = set(visited) | {_current_ref}
-                    inner_sql = _resolve_cte_refs(inner_sql, cte_map, branch_cte_aliases if branch_cte_aliases else None, lookup, default_db, next_visited, schema_lookahead)
+                    next_visited = set(visited) | {cycle_key}
+                    inner_sql = _resolve_cte_refs(inner_sql, cte_map, branch_cte_aliases if branch_cte_aliases else None, lookup, default_db, next_visited, schema_lookahead, depth + 1)
                     branch_sqls.append((pending_op, inner_sql))
                     break
                 pending_op = ''
@@ -520,6 +525,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
         # With может быть как в parsed, так и в select_expr (зависит от версии sqlglot)
         cte_map = {}
         with_clause = parsed.find(exp.With) or select_expr.find(exp.With)
+        with_root = with_clause
         if with_clause:
             # Первый проход: регистрируем все CTE с их прямыми таблицами
             for cte in with_clause.expressions:
@@ -529,13 +535,26 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                     continue
                 # Собираем таблицы из всех веток (для UNION ALL — из каждой ветки)
                 cte_alias_map = {}
+                cte_direct_aliases = {}
                 for tbl in cte_body.find_all(exp.Table):
+                    w = tbl.find_ancestor(exp.With)
+                    if w is not None and w is not with_root:
+                        continue
                     full_tid = _get_table_id(tbl, default_db)
                     if full_tid:
                         if tbl.alias:
                             cte_alias_map[tbl.alias.lower()] = full_tid
                         cte_alias_map[tbl.name.lower()] = full_tid
-                cte_map[cte_name] = {'select': cte_body, 'alias_map': cte_alias_map}
+                    tname = tbl.name.lower()
+                    if tbl.alias:
+                        cte_direct_aliases[tbl.alias.lower()] = tname
+                    cte_direct_aliases[tname] = tname
+                cte_map[cte_name] = {
+                    'name': cte_name,
+                    'select': cte_body,
+                    'alias_map': cte_alias_map,
+                    'cte_aliases': cte_direct_aliases
+                }
 
             # Второй проход: рекурсивно разворачиваем ссылки CTE→CTE в alias_map.
             # Повторяем до тех пор, пока в alias_map не останется ни одной ссылки на другой CTE.
@@ -641,6 +660,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
         # Каждая ветка сохраняется отдельно, чтобы источники колонок собирались
         # из ВСЕХ веток, а не только из первой (first_select).
         parsed_with = parsed.args.get("with")
+        with_root = parsed.find(exp.With) or select_expr.find(exp.With)
         branch_infos = []
         for part in _get_union_parts(select_expr):
             if isinstance(part, str):
@@ -648,12 +668,21 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 branch_infos.append(part)
                 continue
             branch_alias_map = {}
+            branch_direct_cte_aliases = {}
             for tbl in part.find_all(exp.Table):
+                w = tbl.find_ancestor(exp.With)
+                if w is not None and w is not with_root:
+                    continue
                 full_tid = _get_table_id(tbl, default_db)
                 if full_tid:
                     if tbl.alias:
                         branch_alias_map[tbl.alias.lower()] = full_tid
                     branch_alias_map[tbl.name.lower()] = full_tid
+                tname = tbl.name.lower()
+                if tname in cte_map:
+                    if tbl.alias:
+                        branch_direct_cte_aliases[tbl.alias.lower()] = tname
+                    branch_direct_cte_aliases[tname] = tname
             # Убираем из локального маппинга алиасы CTE и subquery (раскрываются отдельно)
             cte_and_subq_keys = set(cte_map.keys()) | set(cte_alias_to_name.keys()) | set(subquery_map.keys())
             for k in list(branch_alias_map.keys()):
@@ -667,7 +696,11 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             if parsed_with and not branch.find(exp.With):
                 branch = part.copy()
                 branch.set("with", parsed_with)
-            branch_infos.append({"select": branch, "alias_map": effective_alias_map})
+            branch_infos.append({
+                "select": branch,
+                "alias_map": effective_alias_map,
+                "cte_aliases": branch_direct_cte_aliases if branch_direct_cte_aliases else cte_alias_to_name
+            })
 
         if parsed.args.get("with"):
             first_select.set("with", parsed.args.get("with"))
@@ -730,7 +763,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                     )
                     branch_sql_lower = branch_sql.lower()
 
-                branch_sql = _resolve_cte_refs(branch_sql, cte_map, cte_alias_to_name, lookup, default_db, None, schema_lookahead)
+                branch_sql = _resolve_cte_refs(branch_sql, cte_map, bi.get('cte_aliases', cte_alias_to_name), lookup, default_db, None, schema_lookahead)
                 # Раскрываем алиасы inline-view подзапросов (аналогично CTE)
                 branch_sql = _resolve_cte_refs(branch_sql, subquery_map, {}, lookup, default_db, None, schema_lookahead)
                 branch_expressions.append((pending_op, branch_sql))
@@ -806,14 +839,23 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 except Exception:
                     pass
 
-                try:
-                    node = lineage(branch_alias, branch, schema=sqlglot_schema, dialect="postgres")
-                    # Если qualify сломался на уровне всего запроса, lineage может вернуть корень без downstream
-                    if not node.downstream:
+                node = None
+                if sqlglot_schema:
+                    try:
+                        node = lineage(branch_alias, branch, schema=sqlglot_schema, dialect="postgres")
+                    except Exception:
+                        node = None
+                if not node or not node.downstream:
+                    try:
                         node_fallback = lineage(branch_alias, branch, dialect="postgres")
-                        if node_fallback.downstream:
+                        if node_fallback and node_fallback.downstream:
                             node = node_fallback
+                        elif not node:
+                            node = node_fallback
+                    except Exception:
+                        pass
 
+                if node:
                     for n in node.walk():
                         if not n.downstream:
                             clean_name = n.name.replace('"', '').replace("'", "")
@@ -869,12 +911,33 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                                                 if tid.split('.')[-1] == tbl_ref:
                                                     src_table = tid
                                                     break
+                                elif clean_name == '*':
+                                    # Обработка листовых звёздочек SELECT *
+                                    candidate_sel = n.expression if isinstance(n.expression, exp.Select) else (n.source if isinstance(n.source, exp.Select) else None)
+                                    if candidate_sel:
+                                        star_tables = []
+                                        for star in candidate_sel.find_all(exp.Star):
+                                            if star.parent and isinstance(star.parent, exp.Column) and star.parent.table:
+                                                star_tables.append(star.parent.table.lower())
+                                        if not star_tables:
+                                            for tbl in candidate_sel.find_all(exp.Table):
+                                                star_tables.append((tbl.alias or tbl.name).lower())
+
+                                        for star_tbl in star_tables:
+                                            if star_tbl in effective_alias_map:
+                                                src_table = effective_alias_map[star_tbl]
+                                                col_name = branch_alias
+                                                source_columns.append({"table": src_table, "column": col_name or "*"})
+                                                found = True
+                                            elif star_tbl in effective_cte:
+                                                for resolved_cte in _resolve_cte_source_column(star_tbl, branch_alias, effective_cte, lookup, default_db):
+                                                    source_columns.append({"table": resolved_cte[0], "column": resolved_cte[1] or "*"})
+                                                    found = True
+                                        continue
 
                             if src_table:
                                 source_columns.append({"table": src_table, "column": col_name or "*"})
                                 found = True
-                except Exception:
-                    pass
 
                 # FALLBACK для этой ветки: если lineage не нашел колонок — ищем в самом выражении
                 if not found and branch_raw:
