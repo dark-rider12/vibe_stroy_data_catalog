@@ -468,7 +468,7 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
     console.log(`[DEBUG generateModifiedSql] addedColumns count=${addedColumns.length}`);
     if (addedColumns.length === 0) {
       console.log(`[DEBUG generateModifiedSql] RETURNING EMPTY SQL`);
-      return { sql: '', hasDuplicates: false, duplicateNames: [] };
+      return { sql: '', hasDuplicates: false, duplicateNames: [], addedExpressions: [], addedLines: [] };
     }
 
     // Для виртуальной таблицы parentTableId из info._propagatedFrom, иначе из data-propagated-from первой колонки в DOM
@@ -478,17 +478,25 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
     // Форматирование таблицы в FROM с учётом foreign tables (ext_*)
     const fromTableRef = formatFromTableReference(parentTableId, childTableId);
 
+    const addedExpressions = [];
+    const addedLines = [];
     const colLines = addedColumns.map((item, idx) => {
       // Если есть выражение, используем его
       if (item.expression) {
         const expr = item.alias ? `${item.expression} AS ${item.alias}` : item.expression;
+        addedExpressions.push(expr);
         const comma = idx < addedColumns.length - 1 ? ',' : '';
-        return `    ${expr}${comma}`;
+        const line = `    ${expr}${comma}`;
+        addedLines.push(line);
+        return line;
       }
       // Иначе обычная колонка с алиасом
       const expr = item.alias ? `${item.colName} AS ${item.alias}` : item.colName;
+      addedExpressions.push(expr);
       const comma = idx < addedColumns.length - 1 ? ',' : '';
-      return `    ${expr}${comma}`;
+      const line = `    ${expr}${comma}`;
+      addedLines.push(line);
+      return line;
     });
 
     const createSql =
@@ -503,7 +511,7 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
       ? `${createSql}\n\n${techComments.join('\n')}`
       : createSql;
 
-    return { sql, hasDuplicates: false, duplicateNames: [] };
+    return { sql, hasDuplicates: false, duplicateNames: [], addedExpressions, addedLines };
   }
   // ── Обычная ветка ────────────────────────────────────────────────────────
 
@@ -514,10 +522,10 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
     ? mainScript + '\n\n\n' + extraScript
     : mainScript || extraScript;
 
-  if (!fullScript) return { sql: '', hasDuplicates: false, duplicateNames: [] };
+  if (!fullScript) return { sql: '', hasDuplicates: false, duplicateNames: [], addedExpressions: [], addedLines: [] };
 
   if (!propagatedSet || propagatedSet.size === 0) {
-    return { sql: fullScript, hasDuplicates: false, duplicateNames: [] };
+    return { sql: fullScript, hasDuplicates: false, duplicateNames: [], addedExpressions: [], addedLines: [] };
   }
 
   // Собираем протянутые колонки для этой таблицы
@@ -537,7 +545,7 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
   });
 
   if (addedColumnsForTable.length === 0) {
-    return { sql: fullScript, hasDuplicates: false, duplicateNames: [] };
+    return { sql: fullScript, hasDuplicates: false, duplicateNames: [], addedExpressions: [], addedLines: [] };
   }
 
   // --- Определяем порядок колонок из DOM карточки ---
@@ -585,12 +593,17 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
   // trailing = "col,"   (запятая в конце строки)
   const fromMatch = mainScript.match(/(\s+FROM\s+)/i);
   if (!fromMatch) {
-    return { sql: fullScript, hasDuplicates: duplicateNames.length > 0, duplicateNames };
+    return { sql: fullScript, hasDuplicates: duplicateNames.length > 0, duplicateNames, addedExpressions: [], addedLines: [] };
   }
 
   const fromIndex = fromMatch.index;
   const selectBlock = mainScript.slice(0, fromIndex);
   const fromAndAfter = mainScript.slice(fromIndex);
+
+  // Извлекаем алиас таблицы из секции FROM
+  const fromTableRegex = /^\s*FROM\s+([a-zA-Z0-9_."`]+)(?:\s+(?:AS\s+)?(?!\b(?:LEFT|RIGHT|FULL|INNER|CROSS|JOIN|WHERE|GROUP|ORDER|HAVING|LIMIT)\b)([a-zA-Z0-9_]+))?/i;
+  const fromTableMatch = fromAndAfter.match(fromTableRegex);
+  const baseAlias = fromTableMatch && fromTableMatch[2] ? fromTableMatch[2] : null;
 
   const selectLines = selectBlock.split('\n');
   let leadingCount = 0, trailingCount = 0;
@@ -635,17 +648,26 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
     return posA - posB;
   });
 
+  const addedExpressions = [];
+  const addedLines = [];
   sortedAdded.forEach(item => {
-    // Формируем выражение: если есть кастомное выражение, используем его, иначе обычная колонка
+    // Формируем выражение: если есть кастомное выражение, используем его, иначе обычная колонка (с алиасом таблицы во FROM, если он есть)
+    let colExpr = item.colName;
+    if (baseAlias && !item.expression) {
+      colExpr = `${baseAlias}.${item.colName}`;
+    }
     const expr = item.expression
       ? (item.alias ? `${item.expression} AS ${item.alias}` : item.expression)
-      : (item.alias ? `${item.colName} AS ${item.alias}` : item.colName);
+      : (item.alias ? `${colExpr} AS ${item.alias}` : colExpr);
+    addedExpressions.push(expr);
+
     const nextOriginal = insertBeforeMap.get(item.colName.toLowerCase());
 
     if (nextOriginal) {
       const lineIdx = findLineIdx(resultLines, nextOriginal);
       if (lineIdx >= 0) {
         const adjustedIdx = lineIdx + offset;
+        let insertedLine = '';
         if (useLeading) {
           // Проверяем: является ли nextOriginal первой колонкой SELECT?
           const firstColIdx = findFirstColumnIdx(resultLines);
@@ -658,24 +680,30 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
               // Добавляем ведущую запятую к старой первой строке
               resultLines[adjustedIdx] = oldFirstLine.replace(/^(\s*)/, '$1, ');
             }
-            resultLines.splice(adjustedIdx, 0, `    ${expr}`);
+            insertedLine = `    ${expr}`;
+            resultLines.splice(adjustedIdx, 0, insertedLine);
           } else {
             // Обычный случай: вставляем «, expr» перед строкой nextOriginal
-            resultLines.splice(adjustedIdx, 0, `    , ${expr}`);
+            insertedLine = `    , ${expr}`;
+            resultLines.splice(adjustedIdx, 0, insertedLine);
           }
         } else {
           // trailing-стиль: новая строка идёт ПЕРЕД nextOriginal,
           // значит после неё есть следующая колонка → она должна иметь запятую
-          resultLines.splice(adjustedIdx, 0, `    ${expr},`);
+          insertedLine = `    ${expr},`;
+          resultLines.splice(adjustedIdx, 0, insertedLine);
         }
+        addedLines.push(insertedLine);
         offset++;
         return;
       }
     }
 
     // Вставка в конец SELECT-блока (перед FROM) — новая колонка станет последней
+    let insertedLine = '';
     if (useLeading) {
-      resultLines.push(`    , ${expr}`);
+      insertedLine = `    , ${expr}`;
+      resultLines.push(insertedLine);
     } else {
       // trailing-стиль: предпоследняя колонка уже имеет запятую (она была последней),
       // добавляем запятую к ней, новая строка — последняя, без запятой
@@ -686,8 +714,10 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
           break;
         }
       }
-      resultLines.push(`    ${expr}`);
+      insertedLine = `    ${expr}`;
+      resultLines.push(insertedLine);
     }
+    addedLines.push(insertedLine);
   });
 
   const modifiedMainSql = resultLines.join('\n') + fromAndAfter;
@@ -697,14 +727,14 @@ export function generateModifiedSql(childTableId, getTableInfo, uniqueId) {
     ? modifiedMainSql + '\n\n\n' + extraScript
     : modifiedMainSql;
 
-  return { sql: finalSql, hasDuplicates: duplicateNames.length > 0, duplicateNames };
+  return { sql: finalSql, hasDuplicates: duplicateNames.length > 0, duplicateNames, addedExpressions, addedLines };
 }
 
 /**
  * Отображает модальное окно с подсвеченными новыми строками SQL
  */
 export function showSqlDiffModal(childTableId, uniqueId, getTableInfo) {
-  const { sql: modifiedSql, hasDuplicates, duplicateNames } = generateModifiedSql(childTableId, getTableInfo, uniqueId);
+  const { sql: modifiedSql, hasDuplicates, duplicateNames, addedExpressions = [], addedLines = [] } = generateModifiedSql(childTableId, getTableInfo, uniqueId);
   const tableName = childTableId.split('.').pop();
 
   const overlay = document.createElement('div');
@@ -770,31 +800,59 @@ export function showSqlDiffModal(childTableId, uniqueId, getTableInfo) {
 
   const lines = modifiedSql.split('\n');
 
-  // Строим set выражений протянутых колонок для быстрого поиска при подсветке
+  // Нормализатор: снимает пробелы по краям, ведущие/замыкающие запятые, схлопывает множественные пробелы и приводит к нижнему регистру
+  const normalizeForDiff = (s) => (s || '')
+    .trim()
+    .replace(/^,\s*/, '')
+    .replace(/,$/, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+  const addedExprSet = new Set();
+  addedExpressions.forEach(e => {
+    const n = normalizeForDiff(e);
+    if (n) addedExprSet.add(n);
+  });
+  addedLines.forEach(l => {
+    const n = normalizeForDiff(l);
+    if (n) addedExprSet.add(n);
+  });
+
+  // Дополнительный fallback: извлекаем baseAlias и строим варианты с/без алиаса таблицы из состояния
   const propagatedSet = PROPAGATION_STATE.propagatedColumns.get(uniqueId);
-  const addedExprs = new Set();
   if (propagatedSet) {
+    const info = getTableInfo(childTableId);
+    const mainScript = (info?.sql_script || '').trim();
+    const fromTableRegex = /\bFROM\s+([a-zA-Z0-9_."`]+)(?:\s+(?:AS\s+)?(?!\b(?:LEFT|RIGHT|FULL|INNER|CROSS|JOIN|WHERE|GROUP|ORDER|HAVING|LIMIT)\b)([a-zA-Z0-9_]+))?/i;
+    const fromMatch = mainScript.match(fromTableRegex);
+    const baseAlias = fromMatch && fromMatch[2] ? fromMatch[2] : null;
+
     const prefix = childTableId.toLowerCase() + '.';
     propagatedSet.forEach(columnKey => {
       if (columnKey.startsWith(prefix)) {
         const colName = columnKey.slice(prefix.length);
         const expressionData = PROPAGATION_STATE.columnExpressions.get(columnKey);
         if (expressionData) {
-          addedExprs.add((expressionData.alias
-            ? `${expressionData.expression} AS ${expressionData.alias}`
-            : expressionData.expression).toLowerCase());
+          addedExprSet.add(normalizeForDiff(expressionData.expression));
+          if (expressionData.alias) {
+            addedExprSet.add(normalizeForDiff(`${expressionData.expression} AS ${expressionData.alias}`));
+          }
         } else {
           const alias = PROPAGATION_STATE.columnAliases.get(columnKey);
-          addedExprs.add((alias ? `${colName} AS ${alias}` : colName).toLowerCase());
+          // Вариант без алиаса таблицы
+          addedExprSet.add(normalizeForDiff(alias ? `${colName} AS ${alias}` : colName));
+          // Вариант с алиасом таблицы (baseAlias)
+          if (baseAlias) {
+            addedExprSet.add(normalizeForDiff(alias ? `${baseAlias}.${colName} AS ${alias}` : `${baseAlias}.${colName}`));
+          }
         }
       }
     });
   }
 
   const codeLinesHtml = lines.map((line) => {
-    // Строка добавленная, если её содержимое (без пробелов и запятых) совпадает с одним из выражений
-    const trimmed = line.trim().replace(/^,\s*/, '').replace(/,$/, '').trim();
-    const isAdded = addedExprs.has(trimmed.toLowerCase());
+    const trimmedNorm = normalizeForDiff(line);
+    const isAdded = trimmedNorm.length > 0 && addedExprSet.has(trimmedNorm);
 
     const cleanLine = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     if (isAdded) {
@@ -1089,40 +1147,150 @@ export function addPropagatedColumn(uniqueId, childTableId, columnInfo, parentTa
 }
 
 /**
+ * Проверяет, соответствует ли таблица в секции FROM родительской таблице parentTableId
+ * @param {string} fromTableRaw - имя таблицы из секции FROM скрипта
+ * @param {string} parentTableId - полный ID родительской таблицы (db.schema.table)
+ * @param {string} childTableId - полный ID дочерней таблицы (db.schema.table)
+ * @returns {boolean}
+ */
+export function isMatchingFromTable(fromTableRaw, parentTableId, childTableId = '') {
+  if (!fromTableRaw || !parentTableId) return false;
+
+  const cleanFrom = fromTableRaw.replace(/["'`]/g, '').trim().toLowerCase();
+  const fParts = cleanFrom.split('.');
+  const pParts = parentTableId.toLowerCase().split('.');
+
+  const fromTableName = fParts[fParts.length - 1];
+  const parentTableName = pParts[pParts.length - 1];
+
+  // Имя таблицы должно совпадать
+  if (fromTableName !== parentTableName) {
+    return false;
+  }
+
+  // Если указано только имя таблицы (без схемы)
+  if (fParts.length === 1) {
+    return true;
+  }
+
+  const fromSchema = fParts[fParts.length - 2];
+  const parentDb = pParts[0];
+  const parentSchema = pParts.length > 1 ? pParts[1] : '';
+
+  // 1. Прямое совпадение схем (например core == core)
+  if (parentSchema && fromSchema === parentSchema) {
+    return true;
+  }
+
+  // 2. Foreign-table соглашения: ext_<db> (ext_ods -> ods), ext_<schema> (ext_calc -> calc)
+  if (fromSchema === `ext_${parentDb}` || fromSchema === `ext_${parentSchema}`) {
+    return true;
+  }
+
+  // 3. Fallback: ext_ods -> ods, ext_dds -> dds
+  if (parentDb === 'ods' && fromSchema === 'ext_ods') return true;
+  if (parentDb === 'dds' && fromSchema === 'ext_dds') return true;
+
+  return false;
+}
+
+/**
  * Проверяет условия для проброса в дочернюю таблицу
  * @param {string} tableId - полный ID таблицы "db.schema.name"
  * @param {Function} getTableInfo - функция получения информации о таблице
+ * @param {string|null} parentTableId - полный ID родительской таблицы (для проверки ведущей таблицы во FROM)
  * @returns {Object} { canPropagate: boolean, reason?: string }
  */
-export function checkPropagationConditions(tableId, getTableInfo) {
+export function checkPropagationConditions(tableId, getTableInfo, parentTableId = null) {
   const info = getTableInfo(tableId);
   if (!info) {
     return { canPropagate: false, reason: "Таблица не найдена" };
   }
 
-  // Условие 1: только один родитель
   const upstream = info.lineage?.upstream || [];
-  if (upstream.length !== 1) {
-    return { 
-      canPropagate: false, 
-      reason: `Количество родителей: ${upstream.length} (требуется ровно 1)` 
-    };
+  if (upstream.length === 0) {
+    return { canPropagate: false, reason: "У таблицы нет родителей в lineage" };
   }
 
-  // Виртуальные таблицы (созданные через Table Propagation) не имеют скрипта
-  // в sql_inventory — их SQL генерируется с нуля через «Новый SQL»
-  // (generateModifiedSql), поэтому условия 2 и 3 к ним неприменимы.
-  if (!info._isVirtual) {
-    // Условие 2: есть скрипт в sql_inventory
-    const hasScript = info.sql_script && info.sql_script.trim().length > 0;
-    if (!hasScript) {
+  // Условие 1: только один родитель ИЛИ (>1 родителя, но со строгими ограничениями на скрипт)
+  if (upstream.length > 1) {
+    if (!parentTableId) {
+      return { 
+        canPropagate: false, 
+        reason: `Количество родителей: ${upstream.length} (требуется ровно 1 или родитель во FROM)` 
+      };
+    }
+
+    if (info._isVirtual) {
+      return { 
+        canPropagate: false, 
+        reason: `Количество родителей: ${upstream.length} (требуется ровно 1)` 
+      };
+    }
+
+    const script = (info.sql_script || '').trim();
+    if (!script) {
       return { canPropagate: false, reason: "Нет скрипта в sql_inventory" };
     }
 
-    // Условие 3: нет GROUP BY в скрипте
-    const hasGroupBy = /GROUP\s+BY/i.test(info.sql_script);
-    if (hasGroupBy) {
+    const cleanScript = script.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // Проверка GROUP BY
+    if (/GROUP\s+BY/i.test(cleanScript)) {
       return { canPropagate: false, reason: "Скрипт содержит GROUP BY" };
+    }
+
+    // Проверка UNION
+    if (/\bUNION\b/i.test(cleanScript)) {
+      return { canPropagate: false, reason: "Скрипт содержит UNION" };
+    }
+
+    // Проверка CTE (WITH ... AS ...)
+    if (/\bWITH\s+[a-zA-Z0-9_]+\s+AS\s*\(/i.test(cleanScript)) {
+      return { canPropagate: false, reason: "Скрипт содержит CTE (WITH)" };
+    }
+
+    // Проверка подзапросов в FROM / JOIN
+    if (/\b(?:FROM|JOIN)\s*\(\s*SELECT\b/i.test(cleanScript)) {
+      return { canPropagate: false, reason: "Скрипт содержит подзапрос" };
+    }
+
+    // Проверка запрещенных JOIN (RIGHT, FULL, CROSS, NATURAL)
+    if (/\b(?:RIGHT|FULL|CROSS|NATURAL)\s+(?:OUTER\s+)?JOIN\b/i.test(cleanScript)) {
+      return { canPropagate: false, reason: "Скрипт содержит RIGHT/FULL/CROSS JOIN" };
+    }
+
+    // Проверка перечисления таблиц через запятую в FROM
+    if (/\bFROM\s+[^\s,()]+(?:\s+(?:AS\s+)?[a-zA-Z0-9_]+)?\s*,/i.test(cleanScript)) {
+      return { canPropagate: false, reason: "Скрипт содержит перечисление таблиц через запятую в FROM" };
+    }
+
+    // Проверка: родительская таблица должна быть в секции FROM
+    const fromRegex = /\bFROM\s+([a-zA-Z0-9_."`]+)(?:\s+(?:AS\s+)?(?!\b(?:LEFT|RIGHT|FULL|INNER|CROSS|JOIN|WHERE|GROUP|ORDER|HAVING|LIMIT)\b)([a-zA-Z0-9_]+))?/i;
+    const fromMatch = cleanScript.match(fromRegex);
+    if (!fromMatch) {
+      return { canPropagate: false, reason: "Не удалось определить таблицу в секции FROM" };
+    }
+
+    const fromTableRaw = fromMatch[1];
+    if (!isMatchingFromTable(fromTableRaw, parentTableId, tableId)) {
+      return { canPropagate: false, reason: "Таблица не является ведущей в секции FROM" };
+    }
+  } else {
+    // upstream.length === 1
+    if (!info._isVirtual) {
+      // Условие 2: есть скрипт в sql_inventory
+      const hasScript = info.sql_script && info.sql_script.trim().length > 0;
+      if (!hasScript) {
+        return { canPropagate: false, reason: "Нет скрипта в sql_inventory" };
+      }
+
+      const cleanScript = (info.sql_script || '').replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      // Условие 3: нет GROUP BY в скрипте
+      const hasGroupBy = /GROUP\s+BY/i.test(cleanScript);
+      if (hasGroupBy) {
+        return { canPropagate: false, reason: "Скрипт содержит GROUP BY" };
+      }
     }
   }
 
@@ -1146,7 +1314,7 @@ export function findEligibleChildren(parentTableId, getTableInfo) {
 
   // Проверяем всех потомков
   for (const childTableId of parentInfo.lineage.downstream) {
-    const result = checkPropagationConditions(childTableId, getTableInfo);
+    const result = checkPropagationConditions(childTableId, getTableInfo, parentTableId);
     if (result.canPropagate) {
       eligible.push({
         tableId: childTableId,
@@ -1305,7 +1473,7 @@ export function showPropagationContextMenu({
     menu.appendChild(noChildren);
   } else if (eligibleChildren.length === 0) {
     const failureDetails = downstream.map(childId => {
-      const res = checkPropagationConditions(childId, getTableInfo);
+      const res = checkPropagationConditions(childId, getTableInfo, tableId);
       const tableName = childId.split('.').pop();
       return `${tableName}: ${res.reason}`;
     }).join('\n');
@@ -1489,7 +1657,7 @@ export function initPropagation(uniqueId, getTableInfo, displayedTables) {
 
       if (eligibleChildren.length === 0) {
         const failureDetails = downstream.map(childId => {
-          const res = checkPropagationConditions(childId, getTableInfo);
+          const res = checkPropagationConditions(childId, getTableInfo, tableId);
           const tableName = childId.split('.').pop();
           return `${tableName}: ${res.reason}`;
         }).join('; ');
