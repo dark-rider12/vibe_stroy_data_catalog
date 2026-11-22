@@ -422,12 +422,26 @@ _COLUMN_LINEAGE_WORKER_CTX = {}
 
 def _init_column_lineage_worker(lookup: dict, schema_dict: dict, schema_lookahead: str, table_columns_map: dict):
     global _COLUMN_LINEAGE_WORKER_CTX
-    from sqlglot.schema import MappingSchema
+    sqlglot_schema = None
+    try:
+        from sqlglot.schema import MappingSchema
+        # sqlglot MappingSchema требует, чтобы у каждой таблицы была хотя бы 1 колонка
+        valid_schema = {}
+        for db, schemas in schema_dict.items():
+            for sc, tbls in schemas.items():
+                for tb, cols in tbls.items():
+                    if cols:
+                        valid_schema.setdefault(db, {}).setdefault(sc, {})[tb] = cols
+        if valid_schema:
+            sqlglot_schema = MappingSchema(valid_schema)
+    except Exception:
+        sqlglot_schema = None
+
     _COLUMN_LINEAGE_WORKER_CTX = {
         "lookup": lookup,
         "schema_lookahead": schema_lookahead,
         "table_columns_map": table_columns_map,
-        "sqlglot_schema": MappingSchema(schema_dict),
+        "sqlglot_schema": sqlglot_schema,
     }
 
 
@@ -455,11 +469,41 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
     try:
         parsed = sqlglot.parse_one(sql, read="postgres")
 
+        # Если скрипт состоит из нескольких выражений (DROP TABLE ...; CREATE TABLE ...),
+        # sqlglot возвращает exp.Block. Извлекаем основное выражение Create, Insert или Select.
+        if isinstance(parsed, exp.Block):
+            main_stmt = parsed.find((exp.Create, exp.Insert, exp.Select, exp.Union))
+            if main_stmt:
+                parsed = main_stmt
+
         target_table = None
-        if isinstance(parsed, exp.Create) and isinstance(parsed.this, exp.Table):
+        if isinstance(parsed, exp.Create) and isinstance(parsed.this, (exp.Table, exp.Schema)):
             target_table = _get_table_id(parsed.this, default_db)
         elif isinstance(parsed, exp.Insert):
             target_table = _get_table_id(parsed.this, default_db)
+
+        # Fallback по метаданным item (target_schema, target_table, db_name)
+        # Если в SQL target_table не указан со схемой (CREATE TABLE table_name) или не совпал с каталогом:
+        if not target_table or target_table not in lookup:
+            item_db = (item.get("db_name") or default_db).lower()
+            item_schema = (item.get("target_schema") or "").lower()
+            item_tbl = (item.get("target_table") or "").lower()
+            if item_schema and item_tbl:
+                cand = f"{item_db}.{item_schema}.{item_tbl}"
+                if cand in lookup:
+                    target_table = cand
+                else:
+                    for k in lookup.keys():
+                        parts = k.split('.')
+                        if len(parts) == 3 and parts[1] == item_schema and parts[2] == item_tbl:
+                            target_table = k
+                            break
+            elif item_tbl:
+                for k in lookup.keys():
+                    parts = k.split('.')
+                    if len(parts) == 3 and parts[0] == item_db and parts[2] == item_tbl:
+                        target_table = k
+                        break
 
         if not target_table or target_table not in lookup:
             return (None, None, None)
@@ -470,12 +514,21 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             return (None, None, None)
 
         # --- Qualify columns to resolve table names ---
-        try:
-            parsed = qualify(parsed, schema=sqlglot_schema, dialect="postgres")
-        except Exception:
-            pass
+        # Используем copy(), чтобы при сбое qualify не повредить AST
+        if sqlglot_schema:
+            try:
+                qualified = qualify(parsed.copy(), schema=sqlglot_schema, dialect="postgres")
+                parsed = qualified
+            except Exception:
+                pass
 
-        select_expr = parsed.expression
+        if isinstance(parsed, (exp.Create, exp.Insert)):
+            select_expr = parsed.expression
+        elif isinstance(parsed, (exp.Select, exp.Union)):
+            select_expr = parsed
+        else:
+            select_expr = getattr(parsed, 'expression', None)
+
         # CREATE TABLE ... AS (SELECT ...) — sqlglot оборачивает SELECT в Subquery
         if isinstance(select_expr, exp.Subquery):
             select_expr = select_expr.this
