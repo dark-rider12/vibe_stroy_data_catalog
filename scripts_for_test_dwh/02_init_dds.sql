@@ -959,183 +959,349 @@ CREATE TABLE IF NOT EXISTS public.sql_inventory (
     target_table text NOT NULL,
     query_text text,
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    created_by varchar,
     PRIMARY KEY (target_schema, target_table)
 );
 
 DELETE FROM public.sql_inventory;
 
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('calc', 'account_card_contract', $$--dds calc таблица с родителями тоже из dds
-create table dds.calc.account_card_contract as
-select
-    ad.account_id,
-    ad.account_number,
-    ad.account_type,
-    ad.currency_cd,
-    ad.open_date,
-    ad.close_date,
-    ad.balance_amt,
-    ad.account_status,
-    ad.contract_id,
-    ad.contract_number,
-    ad.contract_type,
-    ad.contract_start_date,
-    ad.contract_end_date,
-    ad.interest_rate,
-    ad.contract_status,
-    ad.client_id,
-    ad.client_full_name,
-    cd.card_id,
-    cd.masked_card_number,
-    cd.card_system,
-    cd.issue_date,
-    cd.expiry_date,
-    cd.card_status,
-    cd.validity_status
-from dds.core.account_detail ad
-left join dds.core.card_detail cd
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('calc', 'account_card_contract', $$--dds calc таблица с родителями тоже из dds
+
+create table dds.calc.account_card_contract as
+
+select
+
+    ad.account_id,
+
+    ad.account_number,
+
+    ad.account_type,
+
+    ad.currency_cd,
+
+    ad.open_date,
+
+    ad.close_date,
+
+    ad.balance_amt,
+
+    ad.account_status,
+
+    ad.contract_id,
+
+    ad.contract_number,
+
+    ad.contract_type,
+
+    ad.contract_start_date,
+
+    ad.contract_end_date,
+
+    ad.interest_rate,
+
+    ad.contract_status,
+
+    ad.client_id,
+
+    ad.client_full_name,
+
+    cd.card_id,
+
+    cd.masked_card_number,
+
+    cd.card_system,
+
+    cd.issue_date,
+
+    cd.expiry_date,
+
+    cd.card_status,
+
+    cd.validity_status
+
+from dds.core.account_detail ad
+
+left join dds.core.card_detail cd
+
     on cd.account_id = ad.account_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'account_balance_detail', $$
-CREATE TABLE core.account_balance_detail AS
-SELECT
-    balance_id,
-    account_id,
-    balance_date,
-    balance_amt,
-    available_amt,
-    currency_cd,
-    source_system,
-    load_dttm
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'account_balance_detail', $$
+
+CREATE TABLE core.account_balance_detail AS
+
+SELECT
+
+    balance_id,
+
+    account_id,
+
+    balance_date,
+
+    balance_amt,
+
+    available_amt,
+
+    currency_cd,
+
+    source_system,
+
+    load_dttm
+
 FROM dds.ext_ods.abs_account_balance_history$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'account_card_contract', $$--dds таблица с родителями тоже из dds
-create table dds.core.account_card_contract as
-select
-    ad.account_id,
-    ad.account_number,
-    ad.account_type,
-    ad.currency_cd,
-    ad.open_date,
-    ad.close_date,
-    ad.balance_amt,
-    ad.account_status,
-    ad.contract_id,
-    ad.contract_number,
-    ad.contract_type,
-    ad.contract_start_date,
-    ad.contract_end_date,
-    ad.interest_rate,
-    ad.contract_status,
-    ad.client_id,
-    ad.client_full_name,
-    cd.card_id,
-    cd.masked_card_number,
-    cd.card_system,
-    cd.issue_date,
-    cd.expiry_date,
-    cd.card_status,
-    cd.validity_status
-from dds.core.account_detail ad
-left join dds.core.card_detail cd
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'account_card_contract', $$--dds таблица с родителями тоже из dds
+
+create table dds.core.account_card_contract as
+
+select
+
+    ad.account_id,
+
+    ad.account_number,
+
+    ad.account_type,
+
+    ad.currency_cd,
+
+    ad.open_date,
+
+    ad.close_date,
+
+    ad.balance_amt,
+
+    ad.account_status,
+
+    ad.contract_id,
+
+    ad.contract_number,
+
+    ad.contract_type,
+
+    ad.contract_start_date,
+
+    ad.contract_end_date,
+
+    ad.interest_rate,
+
+    ad.contract_status,
+
+    ad.client_id,
+
+    ad.client_full_name,
+
+    cd.card_id,
+
+    cd.masked_card_number,
+
+    cd.card_system,
+
+    cd.issue_date,
+
+    cd.expiry_date,
+
+    cd.card_status,
+
+    cd.validity_status
+
+from dds.core.account_detail ad
+
+left join dds.core.card_detail cd
+
     on cd.account_id = ad.account_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'account_detail', $$create table dds.core.account_detail as
-select
-    a.account_id,
-    a.account_number,
-    a.account_type,
-    a.currency_cd,
-    a.open_date,
-    a.close_date,
-    a.balance_amt,
-    a.account_status,
-    c.contract_id,
-    c.contract_number,
-    c.contract_type,
-    c.start_date as contract_start_date,
-    c.end_date as contract_end_date,
-    c.interest_rate,
-    c.contract_status,
-    cl.client_id,
-    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
-    cl.birth_date,
-    cl.phone,
-    cl.email,
-    cl.status_cd as client_status,
-    current_date - a.open_date as account_age_days,
-    uuid_generate_v5(uuid_nil(), 0 :: text) as source_system_id, -- ID системы-источника. Ссылка на dds.core.ref_source_system
-	true as is_active, -- Признак актуальности
-	false as is_deleted, -- Признак удаления записи в системе-источнике
-	'1900-01-01 23:59:59.999' :: timestamp as dwh_start_date, -- Дата начала действия записи
-	'9999-12-31 23:59:59.999' :: timestamp as dwh_end_date, -- Дата окончания действия записи
-	uuid_generate_v5(uuid_nil(), 1 :: text) as etl_process_id -- ID ETL процесса. Ссылка на справочник ref_etl_process
-from dds.ext_ods.abs_account a
-join dds.ext_ods.abs_contract c
-    on c.contract_id = a.contract_id
-join dds.ext_ods.crm_client cl
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'account_detail', $$create table dds.core.account_detail as
+
+select
+
+    a.account_id,
+
+    a.account_number,
+
+    a.account_type,
+
+    a.currency_cd,
+
+    a.open_date,
+
+    a.close_date,
+
+    a.balance_amt,
+
+    a.account_status,
+
+    c.contract_id,
+
+    c.contract_number,
+
+    c.contract_type,
+
+    c.start_date as contract_start_date,
+
+    c.end_date as contract_end_date,
+
+    c.interest_rate,
+
+    c.contract_status,
+
+    cl.client_id,
+
+    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
+
+    cl.birth_date,
+
+    cl.phone,
+
+    cl.email,
+
+    cl.status_cd as client_status,
+
+    current_date - a.open_date as account_age_days,
+
+    uuid_generate_v5(uuid_nil(), 0 :: text) as source_system_id, -- ID системы-источника. Ссылка на dds.core.ref_source_system
+
+	true as is_active, -- Признак актуальности
+
+	false as is_deleted, -- Признак удаления записи в системе-источнике
+
+	'1900-01-01 23:59:59.999' :: timestamp as dwh_start_date, -- Дата начала действия записи
+
+	'9999-12-31 23:59:59.999' :: timestamp as dwh_end_date, -- Дата окончания действия записи
+
+	uuid_generate_v5(uuid_nil(), 1 :: text) as etl_process_id -- ID ETL процесса. Ссылка на справочник ref_etl_process
+
+from dds.ext_ods.abs_account a
+
+join dds.ext_ods.abs_contract c
+
+    on c.contract_id = a.contract_id
+
+join dds.ext_ods.crm_client cl
+
     on cl.client_id = c.client_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'card_detail', $$-- Детализация по картам: маскируем номер карты по правилу 6*4 и вычисляем срок годности
-create table dds.core.card_detail as
-select
-    card_id,
-    account_id,
-    -- Маскирование: оставляем первые 6 и последние 4 цифры
-    left(card_number, 6) || '******' || right(card_number, 4) as masked_card_number,
-    card_system,
-    issue_date,
-    expiry_date,
-    card_status,
-    -- Бизнес-логика: определяем, не просрочена ли карта
-    case 
-        when expiry_date < current_date then 'expired'
-        when card_status = 'active' then 'valid'
-        else 'invalid'
-    end as validity_status
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'card_detail', $$-- Детализация по картам: маскируем номер карты по правилу 6*4 и вычисляем срок годности
+
+create table dds.core.card_detail as
+
+select
+
+    card_id,
+
+    account_id,
+
+    -- Маскирование: оставляем первые 6 и последние 4 цифры
+
+    left(card_number, 6) || '******' || right(card_number, 4) as masked_card_number,
+
+    card_system,
+
+    issue_date,
+
+    expiry_date,
+
+    card_status,
+
+    -- Бизнес-логика: определяем, не просрочена ли карта
+
+    case 
+
+        when expiry_date < current_date then 'expired'
+
+        when card_status = 'active' then 'valid'
+
+        else 'invalid'
+
+    end as validity_status
+
 from ext_ods.abs_card$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'card_payment_detail', $$
-CREATE TABLE core.card_payment_detail AS
-SELECT
-    payment_id,
-    card_id,
-    account_id,
-    payment_date,
-    payment_amt,
-    principal_amt,
-    interest_amt,
-    debt_amt,
-    payment_type_cd,
-    source_system,
-    load_dttm
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'card_payment_detail', $$
+
+CREATE TABLE core.card_payment_detail AS
+
+SELECT
+
+    payment_id,
+
+    card_id,
+
+    account_id,
+
+    payment_date,
+
+    payment_amt,
+
+    principal_amt,
+
+    interest_amt,
+
+    debt_amt,
+
+    payment_type_cd,
+
+    source_system,
+
+    load_dttm
+
 FROM dds.ext_ods.abs_card_payment$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'client_account_profile', $$-- Профиль: связывает данные DDS с новыми ODS-справочниками
-create table dds.core.client_account_profile as
-select
-    ad.account_id,
-    ad.account_number,
-    ad.client_id,
-    ad.client_full_name,
-    ad.client_status,
-    doc.doc_series || ' ' || doc.doc_number as active_passport,
-    addr.city as client_city,
-    addr.address_type
-from core.account_detail ad
-left join ext_ods.crm_client_document doc 
-    on ad.client_id = doc.client_id 
-    and doc.doc_type = 'passport' 
-    and doc.is_active = true
-left join ext_ods.crm_client_address addr 
-    on ad.client_id = addr.client_id 
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'client_account_profile', $$-- Профиль: связывает данные DDS с новыми ODS-справочниками
+
+create table dds.core.client_account_profile as
+
+select
+
+    ad.account_id,
+
+    ad.account_number,
+
+    ad.client_id,
+
+    ad.client_full_name,
+
+    ad.client_status,
+
+    doc.doc_series || ' ' || doc.doc_number as active_passport,
+
+    addr.city as client_city,
+
+    addr.address_type
+
+from core.account_detail ad
+
+left join ext_ods.crm_client_document doc 
+
+    on ad.client_id = doc.client_id 
+
+    and doc.doc_type = 'passport' 
+
+    and doc.is_active = true
+
+left join ext_ods.crm_client_address addr 
+
+    on ad.client_id = addr.client_id 
+
     and addr.is_active = true$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'client_contact_detail', $$
-CREATE TABLE core.client_contact_detail AS
-SELECT
-    contact_id,
-    client_id,
-    contact_ts,
-    contact_type_cd,
-    channel_cd,
-    subject_txt,
-    result_txt,
-    manager_id,
-    source_system,
-    load_dttm
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'client_contact_detail', $$
+
+CREATE TABLE core.client_contact_detail AS
+
+SELECT
+
+    contact_id,
+
+    client_id,
+
+    contact_ts,
+
+    contact_type_cd,
+
+    channel_cd,
+
+    subject_txt,
+
+    result_txt,
+
+    manager_id,
+
+    source_system,
+
+    load_dttm
+
 FROM dds.ext_ods.crm_client_contact_log$$);
 INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'collateral_detail', $$CREATE TABLE core.collateral_detail AS
 SELECT
@@ -1149,470 +1315,922 @@ SELECT
     source_system,
     load_dttm
 FROM ext_ods.abs_collateral;$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'corporate_client_detail', $$-- ==================== 3. Создание таблиц для юнионов DDS ====================
-
--- DDS: юридические лица
-create table dds.core.corporate_client_detail as
-select
-    corporate_client_id as client_id,
-    inn,
-    kpp,
-    ogrn,
-    company_name,
-    coalesce(short_name, company_name) as display_name,
-    legal_address,
-    coalesce(actual_address, legal_address) as effective_address,
-    ceo_full_name,
-    ceo_position,
-    phone,
-    email,
-    industry_cd,
-    company_size_cd,
-    registration_date,
-    current_date - registration_date as company_age_days,
-    status_cd,
-    created_ts
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'corporate_client_detail', $$-- ==================== 3. Создание таблиц для юнионов DDS ====================
+
+
+
+-- DDS: юридические лица
+
+create table dds.core.corporate_client_detail as
+
+select
+
+    corporate_client_id as client_id,
+
+    inn,
+
+    kpp,
+
+    ogrn,
+
+    company_name,
+
+    coalesce(short_name, company_name) as display_name,
+
+    legal_address,
+
+    coalesce(actual_address, legal_address) as effective_address,
+
+    ceo_full_name,
+
+    ceo_position,
+
+    phone,
+
+    email,
+
+    industry_cd,
+
+    company_size_cd,
+
+    registration_date,
+
+    current_date - registration_date as company_age_days,
+
+    status_cd,
+
+    created_ts
+
 from ext_ods.crm_corporate_client$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'gereg', $$
-CREATE TABLE dds.core.gereg AS
-SELECT
-    client_id,
-    client_external_id,
-    first_name,
-    last_name,
-    middle_name,
-    birth_date,
-    phone,
-    email,
-    registration_date,
-    status_cd,
-    source_system,
-    load_dttm,
-    uuid_generate_v5(uuid_nil(), 1::text) AS source_system_id,
-    true AS is_active,
-    false AS is_deleted,
-    '1900-01-01 23:59:59.999'::timestamp AS dwh_start_date,
-    '9999-12-31 23:59:59.999'::timestamp AS dwh_end_date,
-    uuid_generate_v5(uuid_nil(), 1::text) AS etl_process_id
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'gereg', $$
+
+CREATE TABLE dds.core.gereg AS
+
+SELECT
+
+    client_id,
+
+    client_external_id,
+
+    first_name,
+
+    last_name,
+
+    middle_name,
+
+    birth_date,
+
+    phone,
+
+    email,
+
+    registration_date,
+
+    status_cd,
+
+    source_system,
+
+    load_dttm,
+
+    uuid_generate_v5(uuid_nil(), 1::text) AS source_system_id,
+
+    true AS is_active,
+
+    false AS is_deleted,
+
+    '1900-01-01 23:59:59.999'::timestamp AS dwh_start_date,
+
+    '9999-12-31 23:59:59.999'::timestamp AS dwh_end_date,
+
+    uuid_generate_v5(uuid_nil(), 1::text) AS etl_process_id
+
 FROM dds.ext_ods.crm_client$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'individual_client_detail', $$-- DDS: физические лица
-create table dds.core.individual_client_detail as
-select
-    individual_client_id as client_id,
-    last_name,
-    first_name,
-    middle_name,
-    concat_ws(' ', last_name, first_name, middle_name) as full_name,
-    birth_date,
-    current_date - birth_date as age_days,
-    passport_series || ' ' || passport_number as passport_full,
-    passport_issue_date,
-    passport_issuer,
-    snils,
-    inn,
-    phone,
-    email,
-    registration_address,
-    coalesce(actual_address, registration_address) as effective_address,
-    marital_status_cd,
-    employment_type_cd,
-    monthly_income_amt,
-    case
-        when monthly_income_amt >= 200000 then 'high'
-        when monthly_income_amt >= 100000 then 'medium'
-        else 'low'
-    end as income_level_cd,
-    status_cd,
-    created_ts
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'individual_client_detail', $$-- DDS: физические лица
+
+create table dds.core.individual_client_detail as
+
+select
+
+    individual_client_id as client_id,
+
+    last_name,
+
+    first_name,
+
+    middle_name,
+
+    concat_ws(' ', last_name, first_name, middle_name) as full_name,
+
+    birth_date,
+
+    current_date - birth_date as age_days,
+
+    passport_series || ' ' || passport_number as passport_full,
+
+    passport_issue_date,
+
+    passport_issuer,
+
+    snils,
+
+    inn,
+
+    phone,
+
+    email,
+
+    registration_address,
+
+    coalesce(actual_address, registration_address) as effective_address,
+
+    marital_status_cd,
+
+    employment_type_cd,
+
+    monthly_income_amt,
+
+    case
+
+        when monthly_income_amt >= 200000 then 'high'
+
+        when monthly_income_amt >= 100000 then 'medium'
+
+        else 'low'
+
+    end as income_level_cd,
+
+    status_cd,
+
+    created_ts
+
 from ext_ods.crm_individual_client$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'leasing_detail', $$create unlogged table core.leasing_detail as
-select
-    leasing_id,
-    contract_number,
-    contract_date,
-    lessee_inn,
-    lessee_name,
-    lessor_inn,
-    lessor_name,
-    leasing_object_name,
-    object_type_cd,
-    object_cost_amt,
-    advance_payment_amt,
-    coalesce(advance_payment_amt, 0) / nullif(object_cost_amt, 0) * 100 as advance_pct,
-    leasing_term_months,
-    interest_rate,
-    monthly_payment_amt,
-    total_leasing_cost_amt,
-    buyout_cost_amt,
-    total_leasing_cost_amt - object_cost_amt as overpayment_amt,
-    currency_cd,
-    contract_status_cd,
-    start_date,
-    end_date,
-    end_date - start_date as contract_duration_days,
-    payment_day,
-    collateral_type_cd,
-    collateral_value_amt,
-    insurance_required_flg,
-    insurance_company_name,
-    case
-        when contract_status_cd = 'closed' then 'completed'
-        when end_date < current_date then 'overdue'
-        when end_date <= current_date + interval '90 days' then 'expiring_soon'
-        else 'normal'
-    end as maturity_status,
-    created_ts,
-    updated_ts
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'leasing_detail', $$create unlogged table core.leasing_detail as
+
+select
+
+    leasing_id,
+
+    contract_number,
+
+    contract_date,
+
+    lessee_inn,
+
+    lessee_name,
+
+    lessor_inn,
+
+    lessor_name,
+
+    leasing_object_name,
+
+    object_type_cd,
+
+    object_cost_amt,
+
+    advance_payment_amt,
+
+    coalesce(advance_payment_amt, 0) / nullif(object_cost_amt, 0) * 100 as advance_pct,
+
+    leasing_term_months,
+
+    interest_rate,
+
+    monthly_payment_amt,
+
+    total_leasing_cost_amt,
+
+    buyout_cost_amt,
+
+    total_leasing_cost_amt - object_cost_amt as overpayment_amt,
+
+    currency_cd,
+
+    contract_status_cd,
+
+    start_date,
+
+    end_date,
+
+    end_date - start_date as contract_duration_days,
+
+    payment_day,
+
+    collateral_type_cd,
+
+    collateral_value_amt,
+
+    insurance_required_flg,
+
+    insurance_company_name,
+
+    case
+
+        when contract_status_cd = 'closed' then 'completed'
+
+        when end_date < current_date then 'overdue'
+
+        when end_date <= current_date + interval '90 days' then 'expiring_soon'
+
+        else 'normal'
+
+    end as maturity_status,
+
+    created_ts,
+
+    updated_ts
+
 from ext_ods."1C_leasing"$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'manager_detail', $$CREATE TABLE core.manager_detail AS
-SELECT
-    manager_id,
-    client_id,
-    manager_full_name,
-    manager_role,
-    branch_cd,
-    assignment_date,
-    source_system,
-    load_dttm
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'manager_detail', $$CREATE TABLE core.manager_detail AS
+
+SELECT
+
+    manager_id,
+
+    client_id,
+
+    manager_full_name,
+
+    manager_role,
+
+    branch_cd,
+
+    assignment_date,
+
+    source_system,
+
+    load_dttm
+
 FROM dds.ext_ods.crm_client_manager$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'master_account_party', $$--таблица из всех сырых таблиц
-create table dds.core.master_account_party as
-select
-    -- Счёт
-    a.account_id,
-    a.account_number,
-    a.account_type,
-    a.currency_cd,
-    a.open_date,
-    a.close_date,
-    a.balance_amt,
-    a.account_status,
-
-    -- Договор
-    c.contract_id,
-    c.contract_number,
-    c.contract_type,
-    c.start_date as contract_start_date,
-    c.end_date as contract_end_date,
-    c.interest_rate,
-    c.contract_status,
-
-    -- Клиент (общий справочник)
-    cl.client_id,
-    cl.last_name,
-    cl.first_name,
-    cl.middle_name,
-    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
-    cl.birth_date,
-    cl.phone,
-    cl.email,
-    cl.status_cd as client_status,
-
-    -- Тип клиента
-    case
-        when cc.corporate_client_id is not null then 'CORPORATE'
-        when ic.individual_client_id is not null then 'INDIVIDUAL'
-        else 'UNKNOWN'
-    end as party_type,
-
-    -- Юридическое лицо
-    cc.inn as corp_inn,
-    cc.kpp,
-    cc.ogrn,
-    cc.company_name,
-    cc.short_name as company_short_name,
-    cc.legal_address,
-    cc.actual_address as company_actual_address,
-    cc.ceo_full_name,
-    cc.ceo_position,
-    cc.industry_cd,
-    cc.company_size_cd,
-    cc.registration_date as company_registration_date,
-
-    -- Физическое лицо
-    ic.passport_series,
-    ic.passport_number,
-    ic.passport_issue_date,
-    ic.snils,
-    ic.inn as individual_inn,
-    ic.marital_status_cd,
-    ic.employment_type_cd,
-    ic.monthly_income_amt,
-
-    -- Адрес
-    addr.city as client_city,
-    addr.address_type,
-
-    -- Документ
-    doc.doc_series,
-    doc.doc_number,
-    doc.doc_type,
-    doc.issue_date as doc_issue_date,
-
-    -- Карта
-    card.card_id,
-    left(card.card_number, 6) || '******' || right(card.card_number, 4) as masked_card_number,
-    card.card_system,
-    card.issue_date as card_issue_date,
-    card.expiry_date as card_expiry_date,
-    card.card_status,
-    case
-        when card.expiry_date < current_date then 'expired'
-        when card.card_status = 'active' then 'valid'
-        else 'invalid'
-    end as card_validity_status,
-
-    -- Транзакции (агрегаты из подзапроса)
-    tx.total_trx_count,
-    tx.last_trx_date,
-    tx.total_debit_amt,
-    tx.total_credit_amt,
-
-    -- Расчётные поля
-    current_date - a.open_date as account_age_days,
-    current_date - coalesce(ic.birth_date, cc.registration_date) as party_age_days
-
-from ext_ods.abs_account a
-join ext_ods.abs_contract c
-    on c.contract_id = a.contract_id
-join ext_ods.crm_client cl
-    on cl.client_id = c.client_id
-left join ext_ods.crm_corporate_client cc
-    on cc.corporate_client_id = cl.client_id
-left join ext_ods.crm_individual_client ic
-    on ic.individual_client_id = cl.client_id
-left join ext_ods.crm_client_address addr
-    on addr.client_id = cl.client_id
-    and addr.is_active = true
-left join ext_ods.crm_client_document doc
-    on doc.client_id = cl.client_id
-    and doc.is_active = true
-left join ext_ods.abs_card card
-    on card.account_id = a.account_id
-left join (
-    select
-        account_id,
-        count(*) as total_trx_count,
-        max(transaction_ts::date) as last_trx_date,
-        sum(case when transaction_type = 'debit' then amount_amt else 0 end) as total_debit_amt,
-        sum(case when transaction_type = 'credit' then amount_amt else 0 end) as total_credit_amt
-    from ext_ods.abs_transaction
-    group by account_id
-) tx
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'master_account_party', $$--таблица из всех сырых таблиц
+
+create table dds.core.master_account_party as
+
+select
+
+    -- Счёт
+
+    a.account_id,
+
+    a.account_number,
+
+    a.account_type,
+
+    a.currency_cd,
+
+    a.open_date,
+
+    a.close_date,
+
+    a.balance_amt,
+
+    a.account_status,
+
+
+
+    -- Договор
+
+    c.contract_id,
+
+    c.contract_number,
+
+    c.contract_type,
+
+    c.start_date as contract_start_date,
+
+    c.end_date as contract_end_date,
+
+    c.interest_rate,
+
+    c.contract_status,
+
+
+
+    -- Клиент (общий справочник)
+
+    cl.client_id,
+
+    cl.last_name,
+
+    cl.first_name,
+
+    cl.middle_name,
+
+    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
+
+    cl.birth_date,
+
+    cl.phone,
+
+    cl.email,
+
+    cl.status_cd as client_status,
+
+
+
+    -- Тип клиента
+
+    case
+
+        when cc.corporate_client_id is not null then 'CORPORATE'
+
+        when ic.individual_client_id is not null then 'INDIVIDUAL'
+
+        else 'UNKNOWN'
+
+    end as party_type,
+
+
+
+    -- Юридическое лицо
+
+    cc.inn as corp_inn,
+
+    cc.kpp,
+
+    cc.ogrn,
+
+    cc.company_name,
+
+    cc.short_name as company_short_name,
+
+    cc.legal_address,
+
+    cc.actual_address as company_actual_address,
+
+    cc.ceo_full_name,
+
+    cc.ceo_position,
+
+    cc.industry_cd,
+
+    cc.company_size_cd,
+
+    cc.registration_date as company_registration_date,
+
+
+
+    -- Физическое лицо
+
+    ic.passport_series,
+
+    ic.passport_number,
+
+    ic.passport_issue_date,
+
+    ic.snils,
+
+    ic.inn as individual_inn,
+
+    ic.marital_status_cd,
+
+    ic.employment_type_cd,
+
+    ic.monthly_income_amt,
+
+
+
+    -- Адрес
+
+    addr.city as client_city,
+
+    addr.address_type,
+
+
+
+    -- Документ
+
+    doc.doc_series,
+
+    doc.doc_number,
+
+    doc.doc_type,
+
+    doc.issue_date as doc_issue_date,
+
+
+
+    -- Карта
+
+    card.card_id,
+
+    left(card.card_number, 6) || '******' || right(card.card_number, 4) as masked_card_number,
+
+    card.card_system,
+
+    card.issue_date as card_issue_date,
+
+    card.expiry_date as card_expiry_date,
+
+    card.card_status,
+
+    case
+
+        when card.expiry_date < current_date then 'expired'
+
+        when card.card_status = 'active' then 'valid'
+
+        else 'invalid'
+
+    end as card_validity_status,
+
+
+
+    -- Транзакции (агрегаты из подзапроса)
+
+    tx.total_trx_count,
+
+    tx.last_trx_date,
+
+    tx.total_debit_amt,
+
+    tx.total_credit_amt,
+
+
+
+    -- Расчётные поля
+
+    current_date - a.open_date as account_age_days,
+
+    current_date - coalesce(ic.birth_date, cc.registration_date) as party_age_days
+
+
+
+from ext_ods.abs_account a
+
+join ext_ods.abs_contract c
+
+    on c.contract_id = a.contract_id
+
+join ext_ods.crm_client cl
+
+    on cl.client_id = c.client_id
+
+left join ext_ods.crm_corporate_client cc
+
+    on cc.corporate_client_id = cl.client_id
+
+left join ext_ods.crm_individual_client ic
+
+    on ic.individual_client_id = cl.client_id
+
+left join ext_ods.crm_client_address addr
+
+    on addr.client_id = cl.client_id
+
+    and addr.is_active = true
+
+left join ext_ods.crm_client_document doc
+
+    on doc.client_id = cl.client_id
+
+    and doc.is_active = true
+
+left join ext_ods.abs_card card
+
+    on card.account_id = a.account_id
+
+left join (
+
+    select
+
+        account_id,
+
+        count(*) as total_trx_count,
+
+        max(transaction_ts::date) as last_trx_date,
+
+        sum(case when transaction_type = 'debit' then amount_amt else 0 end) as total_debit_amt,
+
+        sum(case when transaction_type = 'credit' then amount_amt else 0 end) as total_credit_amt
+
+    from ext_ods.abs_transaction
+
+    group by account_id
+
+) tx
+
     on tx.account_id = a.account_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'master_account_party_2', $$--четное кол-во
-
---таблица из всех сырых таблиц
-create table dds.core.master_account_party_2 as
-select
-    -- Счёт
-    a.account_id,
-    a.account_number,
-    a.account_type,
-    a.currency_cd,
-    a.open_date,
-    a.close_date,
-    a.balance_amt,
-    a.account_status,
-
-    -- Договор
-    c.contract_id,
-    c.contract_number,
-    c.contract_type,
-    c.start_date as contract_start_date,
-    c.end_date as contract_end_date,
-    c.interest_rate,
-    c.contract_status,
-
-    -- Клиент (общий справочник)
-    cl.client_id,
-    cl.last_name,
-    cl.first_name,
-    cl.middle_name,
-    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
-    cl.birth_date,
-    cl.phone,
-    cl.email,
-    cl.status_cd as client_status,
-
-    -- Тип клиента
-    case
-        when cc.corporate_client_id is not null then 'CORPORATE'
-        when ic.individual_client_id is not null then 'INDIVIDUAL'
-        else 'UNKNOWN'
-    end as party_type,
-
-    -- Юридическое лицо
-    cc.inn as corp_inn,
-    cc.kpp,
-    cc.ogrn,
-    cc.company_name,
-    cc.short_name as company_short_name,
-    cc.legal_address,
-    cc.actual_address as company_actual_address,
-    cc.ceo_full_name,
-    cc.ceo_position,
-    cc.industry_cd,
-    cc.company_size_cd,
-    cc.registration_date as company_registration_date,
-
-    -- Физическое лицо
-    ic.passport_series,
-    ic.passport_number,
-    ic.passport_issue_date,
-    ic.snils,
-    ic.inn as individual_inn,
-    ic.marital_status_cd,
-    ic.employment_type_cd,
-    ic.monthly_income_amt,
-
-    -- Адрес
-    addr.city as client_city,
-    addr.address_type,
-
-    -- Документ
-    doc.doc_series,
-    doc.doc_number,
-    doc.doc_type,
-    doc.issue_date as doc_issue_date,
-
---     Карта
---    card.card_id,
---    left(card.card_number, 6) || '******' || right(card.card_number, 4) as masked_card_number,
---    card.card_system,
---    card.issue_date as card_issue_date,
---    card.expiry_date as card_expiry_date,
---    card.card_status,
---    case
---        when card.expiry_date < current_date then 'expired'
---        when card.card_status = 'active' then 'valid'
---        else 'invalid'
---    end as card_validity_status,
-
-    -- Транзакции (агрегаты из подзапроса)
-    tx.total_trx_count,
-    tx.last_trx_date,
-    tx.total_debit_amt,
-    tx.total_credit_amt,
-
-    -- Расчётные поля
-    current_date - a.open_date as account_age_days,
-    current_date - coalesce(ic.birth_date, cc.registration_date) as party_age_days
-
-from ext_ods.abs_account a
-join ext_ods.abs_contract c
-    on c.contract_id = a.contract_id
-join ext_ods.crm_client cl
-    on cl.client_id = c.client_id
-left join ext_ods.crm_corporate_client cc
-    on cc.corporate_client_id = cl.client_id
-left join ext_ods.crm_individual_client ic
-    on ic.individual_client_id = cl.client_id
-left join ext_ods.crm_client_address addr
-    on addr.client_id = cl.client_id
-    and addr.is_active = true
-left join ext_ods.crm_client_document doc
-    on doc.client_id = cl.client_id
-    and doc.is_active = true
---left join ext_ods.abs_card card
---    on card.account_id = a.account_id
-left join (
-    select
-        account_id,
-        count(*) as total_trx_count,
-        max(transaction_ts::date) as last_trx_date,
-        sum(case when transaction_type = 'debit' then amount_amt else 0 end) as total_debit_amt,
-        sum(case when transaction_type = 'credit' then amount_amt else 0 end) as total_credit_amt
-    from ext_ods.abs_transaction
-    group by account_id
-) tx
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'master_account_party_2', $$--четное кол-во
+
+
+
+--таблица из всех сырых таблиц
+
+create table dds.core.master_account_party_2 as
+
+select
+
+    -- Счёт
+
+    a.account_id,
+
+    a.account_number,
+
+    a.account_type,
+
+    a.currency_cd,
+
+    a.open_date,
+
+    a.close_date,
+
+    a.balance_amt,
+
+    a.account_status,
+
+
+
+    -- Договор
+
+    c.contract_id,
+
+    c.contract_number,
+
+    c.contract_type,
+
+    c.start_date as contract_start_date,
+
+    c.end_date as contract_end_date,
+
+    c.interest_rate,
+
+    c.contract_status,
+
+
+
+    -- Клиент (общий справочник)
+
+    cl.client_id,
+
+    cl.last_name,
+
+    cl.first_name,
+
+    cl.middle_name,
+
+    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
+
+    cl.birth_date,
+
+    cl.phone,
+
+    cl.email,
+
+    cl.status_cd as client_status,
+
+
+
+    -- Тип клиента
+
+    case
+
+        when cc.corporate_client_id is not null then 'CORPORATE'
+
+        when ic.individual_client_id is not null then 'INDIVIDUAL'
+
+        else 'UNKNOWN'
+
+    end as party_type,
+
+
+
+    -- Юридическое лицо
+
+    cc.inn as corp_inn,
+
+    cc.kpp,
+
+    cc.ogrn,
+
+    cc.company_name,
+
+    cc.short_name as company_short_name,
+
+    cc.legal_address,
+
+    cc.actual_address as company_actual_address,
+
+    cc.ceo_full_name,
+
+    cc.ceo_position,
+
+    cc.industry_cd,
+
+    cc.company_size_cd,
+
+    cc.registration_date as company_registration_date,
+
+
+
+    -- Физическое лицо
+
+    ic.passport_series,
+
+    ic.passport_number,
+
+    ic.passport_issue_date,
+
+    ic.snils,
+
+    ic.inn as individual_inn,
+
+    ic.marital_status_cd,
+
+    ic.employment_type_cd,
+
+    ic.monthly_income_amt,
+
+
+
+    -- Адрес
+
+    addr.city as client_city,
+
+    addr.address_type,
+
+
+
+    -- Документ
+
+    doc.doc_series,
+
+    doc.doc_number,
+
+    doc.doc_type,
+
+    doc.issue_date as doc_issue_date,
+
+
+
+--     Карта
+
+--    card.card_id,
+
+--    left(card.card_number, 6) || '******' || right(card.card_number, 4) as masked_card_number,
+
+--    card.card_system,
+
+--    card.issue_date as card_issue_date,
+
+--    card.expiry_date as card_expiry_date,
+
+--    card.card_status,
+
+--    case
+
+--        when card.expiry_date < current_date then 'expired'
+
+--        when card.card_status = 'active' then 'valid'
+
+--        else 'invalid'
+
+--    end as card_validity_status,
+
+
+
+    -- Транзакции (агрегаты из подзапроса)
+
+    tx.total_trx_count,
+
+    tx.last_trx_date,
+
+    tx.total_debit_amt,
+
+    tx.total_credit_amt,
+
+
+
+    -- Расчётные поля
+
+    current_date - a.open_date as account_age_days,
+
+    current_date - coalesce(ic.birth_date, cc.registration_date) as party_age_days
+
+
+
+from ext_ods.abs_account a
+
+join ext_ods.abs_contract c
+
+    on c.contract_id = a.contract_id
+
+join ext_ods.crm_client cl
+
+    on cl.client_id = c.client_id
+
+left join ext_ods.crm_corporate_client cc
+
+    on cc.corporate_client_id = cl.client_id
+
+left join ext_ods.crm_individual_client ic
+
+    on ic.individual_client_id = cl.client_id
+
+left join ext_ods.crm_client_address addr
+
+    on addr.client_id = cl.client_id
+
+    and addr.is_active = true
+
+left join ext_ods.crm_client_document doc
+
+    on doc.client_id = cl.client_id
+
+    and doc.is_active = true
+
+--left join ext_ods.abs_card card
+
+--    on card.account_id = a.account_id
+
+left join (
+
+    select
+
+        account_id,
+
+        count(*) as total_trx_count,
+
+        max(transaction_ts::date) as last_trx_date,
+
+        sum(case when transaction_type = 'debit' then amount_amt else 0 end) as total_debit_amt,
+
+        sum(case when transaction_type = 'credit' then amount_amt else 0 end) as total_credit_amt
+
+    from ext_ods.abs_transaction
+
+    group by account_id
+
+) tx
+
     on tx.account_id = a.account_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'test33', $$CREATE TABLE dds.core.test33 AS
-SELECT
-    credit_id
-    ,contract_number
-    ,contract_date
-    ,borrower_inn
-    ,borrower_name
-    ,borrower_type_cd
-    ,product_cd
-    ,product_name
-    ,credit_purpose_txt
-    ,credit_amount_amt
-    ,credit_term_months
-    ,payment_type_cd
-    ,monthly_payment_amt
-    ,collateral_type_cd
-    ,collateral_value_amt
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'test33', $$CREATE TABLE dds.core.test33 AS
+
+SELECT
+
+    credit_id
+
+    ,contract_number
+
+    ,contract_date
+
+    ,borrower_inn
+
+    ,borrower_name
+
+    ,borrower_type_cd
+
+    ,product_cd
+
+    ,product_name
+
+    ,credit_purpose_txt
+
+    ,credit_amount_amt
+
+    ,credit_term_months
+
+    ,payment_type_cd
+
+    ,monthly_payment_amt
+
+    ,collateral_type_cd
+
+    ,collateral_value_amt
+
 FROM dds.ext_ods.abs_corp_credit$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'test44', $$CREATE TABLE dds.core.test44 AS
-SELECT
-    contract_number,
-    contract_date,
-    borrower_inn
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'test44', $$CREATE TABLE dds.core.test44 AS
+
+SELECT
+
+    contract_number,
+
+    contract_date,
+
+    borrower_inn
+
 FROM dds.core.test33$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'transaction_detail', $$create table dds.core.transaction_detail as
-select
-    t.transaction_id,
-    t.account_id,
-    a.account_number,
-    t.transaction_ts,
-    t.transaction_ts::date as transaction_date,
-    t.transaction_type,
-    t.amount_amt,
-    case
-        when t.transaction_type = 'debit' then -t.amount_amt
-        else t.amount_amt
-    end as signed_amount_amt,
-    t.currency_cd,
-    t.merchant_name,
-    t.description_txt,
-    t.channel_cd,
-    t.transaction_status,
-    case
-        when t.merchant_name is not null then 'merchant_operation'
-        when t.description_txt ilike '%перевод%' then 'transfer'
-        when t.description_txt ilike '%зарплат%' then 'salary'
-        else 'other'
-    end as operation_category,
-    uuid_generate_v5(uuid_nil(), 0 :: text) as source_system_id, -- ID системы-источника. Ссылка на dds.core.ref_source_system
-	uuid_generate_v5(uuid_nil(), 1 :: text) as etl_process_id -- ID ETL процесса. Ссылка на справочник ref_etl_process
-from ext_ods.abs_transaction t
-join ext_ods.abs_account a
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'transaction_detail', $$create table dds.core.transaction_detail as
+
+select
+
+    t.transaction_id,
+
+    t.account_id,
+
+    a.account_number,
+
+    t.transaction_ts,
+
+    t.transaction_ts::date as transaction_date,
+
+    t.transaction_type,
+
+    t.amount_amt,
+
+    case
+
+        when t.transaction_type = 'debit' then -t.amount_amt
+
+        else t.amount_amt
+
+    end as signed_amount_amt,
+
+    t.currency_cd,
+
+    t.merchant_name,
+
+    t.description_txt,
+
+    t.channel_cd,
+
+    t.transaction_status,
+
+    case
+
+        when t.merchant_name is not null then 'merchant_operation'
+
+        when t.description_txt ilike '%перевод%' then 'transfer'
+
+        when t.description_txt ilike '%зарплат%' then 'salary'
+
+        else 'other'
+
+    end as operation_category,
+
+    uuid_generate_v5(uuid_nil(), 0 :: text) as source_system_id, -- ID системы-источника. Ссылка на dds.core.ref_source_system
+
+	uuid_generate_v5(uuid_nil(), 1 :: text) as etl_process_id -- ID ETL процесса. Ссылка на справочник ref_etl_process
+
+from ext_ods.abs_transaction t
+
+join ext_ods.abs_account a
+
     on a.account_id = t.account_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'v_test_account_detail', $$create or replace view dds.core.v_test_account_detail as
-select
-    a.account_id,
-    a.account_number,
-    a.account_type,
-    a.currency_cd,
-    a.open_date,
-    a.close_date,
-    a.balance_amt,
-    a.account_status,
-    c.contract_id,
-    c.contract_number,
-    c.contract_type,
-    c.start_date as contract_start_date,
-    c.end_date as contract_end_date,
-    c.interest_rate,
-    c.contract_status,
-    cl.client_id,
-    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
-    cl.birth_date,
-    cl.phone,
-    cl.email,
-    cl.status_cd as client_status,
-    current_date - a.open_date as account_age_days
-from ext_ods.abs_account a
-join ext_ods.abs_contract c
-    on c.contract_id = a.contract_id
-join ext_ods.crm_client cl
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('core', 'v_test_account_detail', $$create or replace view dds.core.v_test_account_detail as
+
+select
+
+    a.account_id,
+
+    a.account_number,
+
+    a.account_type,
+
+    a.currency_cd,
+
+    a.open_date,
+
+    a.close_date,
+
+    a.balance_amt,
+
+    a.account_status,
+
+    c.contract_id,
+
+    c.contract_number,
+
+    c.contract_type,
+
+    c.start_date as contract_start_date,
+
+    c.end_date as contract_end_date,
+
+    c.interest_rate,
+
+    c.contract_status,
+
+    cl.client_id,
+
+    concat_ws(' ', cl.last_name, cl.first_name, cl.middle_name) as client_full_name,
+
+    cl.birth_date,
+
+    cl.phone,
+
+    cl.email,
+
+    cl.status_cd as client_status,
+
+    current_date - a.open_date as account_age_days
+
+from ext_ods.abs_account a
+
+join ext_ods.abs_contract c
+
+    on c.contract_id = a.contract_id
+
+join ext_ods.crm_client cl
+
     on cl.client_id = c.client_id$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('public', 'test_for_exception', $$create table dds.public.test_for_exception as
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('public', 'test_for_exception', $$create table dds.public.test_for_exception as
+
 select * from core.card_detail$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('sandbox_1', 'test1', $$create table dds.sandbox_1.test1 as
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('sandbox_1', 'test1', $$create table dds.sandbox_1.test1 as
+
 select * from dds.core.account_detail$$);
-INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('sandbox_2', 'test2', $$create table dds.sandbox_2.test2 as
+INSERT INTO public.sql_inventory (target_schema, target_table, query_text) VALUES ('sandbox_2', 'test2', $$create table dds.sandbox_2.test2 as
+
 select * from dds.core.transaction_detail$$);
 

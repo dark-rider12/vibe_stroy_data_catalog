@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS public.sql_inventory (
 	target_table text NOT NULL,
 	query_text text NULL,
 	updated_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
+	created_by varchar NULL,
 	CONSTRAINT sql_inventory_pkey PRIMARY KEY (target_schema, target_table),
 	CONSTRAINT sql_inventory_target_schema_not_null NOT NULL target_schema,
 	CONSTRAINT sql_inventory_target_table_not_null NOT NULL target_table
@@ -47,10 +48,10 @@ BEGIN
                 WHEN obj.object_identity LIKE '%.%' THEN split_part(obj.object_identity, '.', 2)
                 ELSE obj.object_identity 
             END;
-            INSERT INTO public.sql_inventory (target_schema, target_table, query_text, updated_at)
-            VALUES (obj.schema_name, v_table_name, current_query(), CURRENT_TIMESTAMP)
+            INSERT INTO public.sql_inventory (target_schema, target_table, query_text, updated_at, created_by)
+            VALUES (obj.schema_name, v_table_name, current_query(), CURRENT_TIMESTAMP, session_user)
             ON CONFLICT (target_schema, target_table) 
-            DO UPDATE SET query_text = EXCLUDED.query_text, updated_at = EXCLUDED.updated_at;
+            DO UPDATE SET query_text = EXCLUDED.query_text, updated_at = EXCLUDED.updated_at, created_by = COALESCE(EXCLUDED.created_by, public.sql_inventory.created_by);
         END IF;
     END LOOP;
 END;

@@ -205,6 +205,11 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
                 dt_str = str(updated_at)[:19]  # fallback для строк ISO
             catalog[db_name][schema_name][table_name]["script_updated_at"] = dt_str
 
+        # Сохраняем логин создателя скрипта из public.sql_inventory
+        created_by = item.get("created_by")
+        if created_by:
+            catalog[db_name][schema_name][table_name]["created_by"] = str(created_by).strip()
+
         attached_count += 1
 
     # Формируем дополнительные блоки (NOT NULL + COMMENT) для каждой таблицы

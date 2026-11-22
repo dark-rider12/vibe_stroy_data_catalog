@@ -52,7 +52,7 @@
     </div>
 
     <div class="table-sources" style="margin-bottom: 20px; font-size: 15px; color: var(--text-dark);">
-        <b>Источники:</b> {{ table_info.sources }}{% if table_info.script_updated_at %}&nbsp;&nbsp;&nbsp;<b>Дата обновления скрипта:</b> {{ table_info.script_updated_at }}{% endif %}
+        <b>Источники:</b> {{ table_info.sources }}{% if table_info.script_updated_at %}&nbsp;&nbsp;&nbsp;<b>Дата обновления скрипта:</b> {{ table_info.script_updated_at }}{% endif %}{% if table_info.created_by %}&nbsp;&nbsp;&nbsp;<b>Сотрудник:</b> {{ table_info.created_by }}{% endif %}
     </div>
 
     <div class="tabs-nav-bar">

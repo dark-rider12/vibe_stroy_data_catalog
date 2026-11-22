@@ -175,8 +175,22 @@ def load_sql_transformations(config: dict) -> list[dict]:
         try:
             conn = get_connection(config, db_name)
             cursor = conn.cursor()
+            # Проверяем наличие колонки created_by для обратной совместимости
             cursor.execute("""
-                SELECT target_schema, target_table, query_text, updated_at
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                  AND table_name = 'sql_inventory' 
+                  AND column_name = 'created_by'
+            """)
+            has_created_by = bool(cursor.fetchone())
+
+            cols = "target_schema, target_table, query_text, updated_at"
+            if has_created_by:
+                cols += ", created_by"
+
+            cursor.execute(f"""
+                SELECT {cols}
                 FROM public.sql_inventory
             """)
             rows = cursor.fetchall()
@@ -186,6 +200,7 @@ def load_sql_transformations(config: dict) -> list[dict]:
                 target_table  = row[1]
                 raw_query     = row[2] or ""
                 updated_at    = row[3]
+                created_by    = row[4] if has_created_by else None
                 # Пропускаем чисто системные команды (CREATE/DROP EXTENSION), PL/pgSQL блоки DO $...$ и чисто DROP/TRUNCATE/SET
                 is_pure_ext  = "EXTENSION" in raw_query.upper() and bool(_IS_PURE_EXTENSION_REGEX.match(raw_query))
                 is_pure_do   = "DO" in raw_query.upper() and bool(_IS_PURE_DO_BLOCK_REGEX.match(raw_query))
@@ -216,6 +231,7 @@ def load_sql_transformations(config: dict) -> list[dict]:
                     "query":         query,
                     "raw_query":     raw_query,
                     "updated_at":    updated_at,
+                    "created_by":    created_by,
                 })
         except Exception as e:
             print(f"   - [Warning] sql_inventory в БД '{db_name}': {e}")

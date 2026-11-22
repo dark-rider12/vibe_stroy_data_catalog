@@ -1828,6 +1828,7 @@ CREATE TABLE IF NOT EXISTS public.sql_inventory (
     target_table text NOT NULL,
     query_text text,
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    created_by varchar,
     PRIMARY KEY (target_schema, target_table)
 );
 
