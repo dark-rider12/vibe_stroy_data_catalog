@@ -80,6 +80,18 @@ _DO_BLOCK_STMT_REGEX = re.compile(
     re.IGNORECASE | re.DOTALL
 )
 
+# Чистые DDL/служебные команды очистки или сессии (не являются трансформациями данных)
+_IS_PURE_DROP_TRUNCATE_SET_REGEX = re.compile(
+    r'^(?:--[^\r\n]*(?:\r?\n|\Z)|/\*[\s\S]*?\*/|\s)*(?:DROP\s+(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW|MATERIALIZED\s+VIEW)|TRUNCATE(?:\s+TABLE)?|SET\s+)\b[^;]*;?(?:--[^\r\n]*(?:\r?\n|\Z)|/\*[\s\S]*?\*/|\s)*$',
+    re.IGNORECASE
+)
+
+# Инструкции DROP / TRUNCATE / SET внутри комплексных скриптов (отсекаются для lineage)
+_DROP_TRUNCATE_SET_STMT_REGEX = re.compile(
+    r'(?:^|(?<=;))\s*(?:--[^\r\n]*(?:\r?\n|\Z)|/\*[\s\S]*?\*/|\s)*(?:DROP\s+(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW|MATERIALIZED\s+VIEW)|TRUNCATE(?:\s+TABLE)?|SET\s+)\b[^;]*;?',
+    re.IGNORECASE
+)
+
 
 def _normalize_foreign_tables(sql: str, db_name: str = "") -> str:
     """
@@ -174,10 +186,11 @@ def load_sql_transformations(config: dict) -> list[dict]:
                 target_table  = row[1]
                 raw_query     = row[2] or ""
                 updated_at    = row[3]
-                # Пропускаем чисто системные команды (CREATE/DROP EXTENSION) и PL/pgSQL блоки DO $...$
-                is_pure_ext = "EXTENSION" in raw_query.upper() and bool(_IS_PURE_EXTENSION_REGEX.match(raw_query))
-                is_pure_do  = "DO" in raw_query.upper() and bool(_IS_PURE_DO_BLOCK_REGEX.match(raw_query))
-                if is_pure_ext or is_pure_do:
+                # Пропускаем чисто системные команды (CREATE/DROP EXTENSION), PL/pgSQL блоки DO $...$ и чисто DROP/TRUNCATE/SET
+                is_pure_ext  = "EXTENSION" in raw_query.upper() and bool(_IS_PURE_EXTENSION_REGEX.match(raw_query))
+                is_pure_do   = "DO" in raw_query.upper() and bool(_IS_PURE_DO_BLOCK_REGEX.match(raw_query))
+                is_pure_drop = bool(re.search(r'\b(DROP|TRUNCATE|SET)\b', raw_query, re.IGNORECASE)) and bool(_IS_PURE_DROP_TRUNCATE_SET_REGEX.match(raw_query))
+                if is_pure_ext or is_pure_do or is_pure_drop:
                     continue
                 query         = _normalize_foreign_tables(raw_query, db_name)
                 # Если в комплексном скрипте есть преамбула EXTENSION, отсекаем её из query для lineage
@@ -188,6 +201,11 @@ def load_sql_transformations(config: dict) -> list[dict]:
                 # Если в комплексном скрипте есть PL/pgSQL блок DO $...$, отсекаем его из query для lineage
                 if re.search(r'\bDO\b', query, re.IGNORECASE):
                     query = _DO_BLOCK_STMT_REGEX.sub('', query).strip(' ;\n\r\t')
+                    if not query:
+                        continue
+                # Если в комплексном скрипте есть преамбула DROP / TRUNCATE / SET, отсекаем её из query для lineage
+                if re.search(r'\b(DROP|TRUNCATE|SET)\b', query, re.IGNORECASE):
+                    query = _DROP_TRUNCATE_SET_STMT_REGEX.sub('', query).strip(' ;\n\r\t')
                     if not query:
                         continue
                 results.append({

@@ -10,7 +10,10 @@
   * `dm` — витрины данных. Читает `dds` через Foreign Data Wrapper (`postgres_fdw`, сервер `dds_server`, схемы `ext_dds`, `ext_calc`). Схема `core` (18 витрин).
 
 * **Связь с генератором каталога**:
-  В базах `dds` и `dm` создаётся служебная таблица `public.sql_inventory` и Event Trigger `capture_ddl_sql_trigger_public`, который автоматически перехватывает запросы создания таблиц и представлений (`CREATE TABLE AS`, `CREATE VIEW` и др.) и регистрирует их текст. Именно из `public.sql_inventory` скрипт `sql_loader.py` извлекает SQL-трансформации и строит автоматический Table & Column Lineage.
+  * В базах `dds` и `dm` создаётся служебная таблица `public.sql_inventory` и Event Trigger `capture_ddl_sql_trigger_public`, который автоматически перехватывает запросы создания таблиц и представлений (`CREATE TABLE AS`, `CREATE VIEW` и др.) и регистрирует их текст. Именно из `public.sql_inventory` скрипт `sql_loader.py` извлекает SQL-трансформации и строит автоматический Table & Column Lineage.
+  * В базе `dds` создаётся справочник **`core.ref_source_system`** (`system_name`, `system_prefix`, `system_id`). Он считывается модулем `metadata_loader.py` для:
+    * сопоставления префиксов ODS-таблиц (`abs_*`, `crm_*`, `1c_*`) с реальными названиями систем-источников (`load_source_system_map`);
+    * детерминированной генерации хэш-ID сущностей в Column Lineage (кнопка 🆔 в интерфейсе), где `system_id` используется как числовой идентификатор источника (`load_source_system_details`).
 
 ---
 
@@ -63,7 +66,7 @@ psql -U postgres -d dds -f 02_init_dds.sql
 ```
 * Включает `postgres_fdw` и подключает `ods_server`.
 * Импортирует таблицы из `ods.core` в `ext_ods`.
-* Формирует детальный слой (`core.*`, `calc.*`).
+* Формирует детальный слой (`core.*`, `calc.*`), включая справочник систем-источников `core.ref_source_system` с тестовыми записями (`abs`, `crm`, `1c`).
 * Навешивает комментарии.
 * DDL-запросы создания автоматически перехватываются триггером в `public.sql_inventory`.
 

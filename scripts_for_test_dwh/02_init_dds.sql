@@ -265,16 +265,27 @@ alter table core.card_detail
 
 
 
---core.ref_source_system
-create table core.ref_source_system (
-	system_name varchar not null, --Название системы
-	system_prefix varchar not null --Префикс на ODS-слое
+-- ==================== core.ref_source_system ====================
+DROP TABLE IF EXISTS core.ref_source_system;
+
+CREATE TABLE core.ref_source_system (
+	system_name varchar NOT NULL,
+	system_prefix varchar NOT NULL,
+	system_id numeric NULL,
+	CONSTRAINT ref_source_system_system_name_not_null NOT NULL system_name,
+	CONSTRAINT ref_source_system_system_prefix_not_null NOT NULL system_prefix
 );
 
-
+COMMENT ON TABLE core.ref_source_system IS 'Справочник систем-источников данных';
 COMMENT ON COLUMN core.ref_source_system.system_name IS 'Название системы';
 COMMENT ON COLUMN core.ref_source_system.system_prefix IS 'Префикс на ODS-слое';
-COMMENT ON TABLE core.ref_source_system IS 'Справочник систем-источников данных';
+COMMENT ON COLUMN core.ref_source_system.system_id IS 'ID системы для хэширования';
+
+-- Начальное наполнение тестовыми данными для работы фичи хэш-ID и маппинга ODS
+INSERT INTO core.ref_source_system (system_name, system_prefix, system_id) VALUES
+    ('АБС', 'abs', 1),
+    ('CRM', 'crm', 2),
+    ('1C', '1c', 3);
 
 
 --core.ref_source_system

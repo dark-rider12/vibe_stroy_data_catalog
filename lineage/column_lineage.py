@@ -917,7 +917,8 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                         col_lineage[target_col]["sources"].append(entry)
         return (target_table, col_lineage, None)
     except Exception as e:
-        warning_msg = f"   [Column Lineage Warning] Ошибка расчета для {target_table or item.get('target_table')}: {e}"
+        err_line = str(e).strip().split('\n')[0].strip()
+        warning_msg = f"   [Column Lineage Warning] Ошибка расчета для {target_table or item.get('target_table')}: {err_line}"
         return (None, None, warning_msg)
 
 def compute_column_lineage(catalog: dict, sql_transformations: list[dict], existing_tables: set = None) -> dict:
