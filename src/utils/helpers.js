@@ -284,6 +284,12 @@ export function initScriptLineNumbers(root = document) {
   blocks.forEach((code) => {
     // Не обрабатывать повторно
     if (code.dataset.lineNumbersApplied) return;
+
+    // Сохраняем нетронутый исходный текст ДО вставки span-ов нумерации
+    if (!code.dataset.rawScript) {
+      code.dataset.rawScript = code.textContent;
+    }
+
     code.dataset.lineNumbersApplied = "true";
 
     const raw = code.textContent;

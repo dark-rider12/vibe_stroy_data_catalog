@@ -222,6 +222,46 @@ export function switchScriptMode(uniqueId, mode, btnElement) {
 }
 
 /**
+ * Извлекает чистый, неповрежденный текст SQL-скрипта.
+ * Защищает от склеивания строк в одну длинную строку и исключает артефакты номеров строк (.line-num).
+ *
+ * @param {HTMLElement} pre - Элемент <pre> блока скрипта
+ * @param {HTMLElement} code - Вложенный элемент <code>
+ * @returns {string} Чистый текст скрипта
+ */
+export function getCleanScriptText(pre, code) {
+  // 1. Приоритет: catalogData (статичный неизменяемый источник правды из БД)
+  const db = pre?.dataset?.db || "";
+  const schema = pre?.dataset?.schema || "";
+  const table = pre?.dataset?.table || "";
+  const catalog = typeof window !== "undefined" && window.catalogData ? window.catalogData : null;
+  if (catalog && db && schema && table) {
+    const tableInfo = catalog[db]?.[schema]?.[table];
+    if (tableInfo && typeof tableInfo.sql_script === "string" && tableInfo.sql_script.trim()) {
+      const main = tableInfo.sql_script.trim();
+      const extra = (tableInfo.sql_script_extra || "").trim();
+      return extra ? `${main}\n\n\n${extra}` : main;
+    }
+  }
+
+  // 2. Приоритет: ранее сохраненный чистый скрипт в dataset.rawScript
+  if (code?.dataset?.rawScript) {
+    return code.dataset.rawScript;
+  }
+
+  // 3. Приоритет: если DOM уже содержит строки .line-code — собираем только их, пропуская .line-num
+  if (pre) {
+    const lineCodes = pre.querySelectorAll(".line-code");
+    if (lineCodes.length > 0) {
+      return Array.from(lineCodes).map((el) => el.textContent).join("\n");
+    }
+  }
+
+  // 4. Fallback: textContent элемента code (только если spans еще не создавались)
+  return code ? code.textContent : "";
+}
+
+/**
  * Инициализирует отображение улучшенного скрипта во вкладке «Скрипт».
  * Вызывается при переключении на pane-script.
  *
@@ -239,8 +279,8 @@ export function initEnhancedScript(uniqueId) {
     return;
   }
 
-  // Получаем исходный текст скрипта
-  const rawScript = code.textContent;
+  // Получаем гарантированно чистый исходный текст скрипта
+  const rawScript = getCleanScriptText(pre, code);
   if (!rawScript || !rawScript.trim()) return;
 
   const db = pre.dataset.db || "";
@@ -258,7 +298,7 @@ export function initEnhancedScript(uniqueId) {
 
   // Улучшаем основной скрипт трансформации
   const enhancedMain = enhanceSqlScript(mainScript, {
-    catalogData: window.catalogData,
+    catalogData: typeof window !== "undefined" ? window.catalogData : null,
     currentDb: db,
     currentSchema: schema,
     currentTable: table
@@ -304,7 +344,7 @@ export function toggleScriptRawMode(uniqueId, isRaw) {
     initEnhancedScript(uniqueId);
   }
 
-  const rawScript = code.dataset.rawScript || code.textContent;
+  const rawScript = getCleanScriptText(pre, code);
   const enhancedScript = code.dataset.enhancedScript || rawScript;
 
   // Переключаем содержимое

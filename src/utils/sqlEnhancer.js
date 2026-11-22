@@ -4,7 +4,6 @@
  *       1. Квалификация полей (Column Qualification) по метаданным соединенных таблиц.
  *       2. Нормализация регистра ключевых слов (Capitalize Keywords).
  *       3. Явное добавление AS для псевдонимов колонок.
- *       4. Выравнивание отступов и джойнов (Prettify).
  */
 
 /**
@@ -416,86 +415,6 @@ export function qualifyColumnsInSelectList(selectListSql, joinedTables) {
 }
 
 /**
- * ПРАВИЛО 4: Выравнивание отступов и джойнов (Prettify).
- * Переносит JOIN ... ON ... и логические связки AND/OR на отдельные строки с единым отступом в 4 пробела.
- *
- * @param {string} fromAndAfterSql - Текст начиная с секции FROM
- * @returns {string}
- */
-export function prettifyJoinsAndConditions(fromAndAfterSql) {
-  if (!fromAndAfterSql) return "";
-
-  const lines = fromAndAfterSql.split("\n");
-  const result = [];
-
-  for (let line of lines) {
-    let trimmed = line.trim();
-    if (!trimmed) {
-      result.push("");
-      continue;
-    }
-
-    // Если строка содержит JOIN ... ON ... на одной строке
-    // Переносим ON на следующую строку с отступом в 4 пробела
-    const joinOnMatch = trimmed.match(/^((?:LEFT|RIGHT|FULL|INNER|CROSS|NATURAL)?\s*(?:OUTER\s+)?JOIN\s+[\s\S]+?)\s+\bON\b\s+([\s\S]+)$/i);
-    if (joinOnMatch) {
-      const joinPart = joinOnMatch[1].trim();
-      const onPart = joinOnMatch[2].trim();
-
-      result.push(joinPart);
-
-      // Разбиваем условия в ON по AND/OR верхнего уровня
-      const onTokens = onPart.split(/\s+\b(AND|OR)\b\s+/i);
-      if (onTokens.length > 1) {
-        // Первая часть идет с префиксом ON
-        result.push(`    ON ${onTokens[0].trim()}`);
-        // Последующие части идут с оператором AND/OR
-        for (let k = 1; k < onTokens.length; k += 2) {
-          const op = onTokens[k].toUpperCase();
-          const cond = onTokens[k + 1] ? onTokens[k + 1].trim() : "";
-          if (cond) {
-            result.push(`    ${op} ${cond}`);
-          }
-        }
-      } else {
-        result.push(`    ON ${onPart}`);
-      }
-      continue;
-    }
-
-    // Если строка уже начинается с ON
-    if (/^ON\b/i.test(trimmed)) {
-      result.push(`    ${trimmed}`);
-      continue;
-    }
-
-    // Если строка в секции WHERE или ON содержит условия AND/OR
-    if (/^WHERE\b/i.test(trimmed)) {
-      const whereMatch = trimmed.match(/^WHERE\s+([\s\S]+)$/i);
-      if (whereMatch) {
-        const whereCond = whereMatch[1].trim();
-        const whereTokens = whereCond.split(/\s+\b(AND|OR)\b\s+/i);
-        if (whereTokens.length > 1) {
-          result.push(`WHERE ${whereTokens[0].trim()}`);
-          for (let k = 1; k < whereTokens.length; k += 2) {
-            const op = whereTokens[k].toUpperCase();
-            const cond = whereTokens[k + 1] ? whereTokens[k + 1].trim() : "";
-            if (cond) {
-              result.push(`    ${op} ${cond}`);
-            }
-          }
-          continue;
-        }
-      }
-    }
-
-    result.push(line);
-  }
-
-  return result.join("\n");
-}
-
-/**
  * ГЛАВНАЯ ФУНКЦИЯ: Комплексное улучшение SQL-скрипта.
  *
  * @param {string} sql - Исходный SQL скрипт
@@ -547,10 +466,7 @@ export function enhanceSqlScript(sql, options = {}) {
         }
       }
 
-      // Правило 4: Форматирование JOIN и связок AND/OR
-      const formattedFromAndAfter = prettifyJoinsAndConditions(fromAndAfter);
-
-      processedSql = prefix + selectBody + formattedFromAndAfter;
+      processedSql = prefix + selectBody + fromAndAfter;
     }
   }
 
