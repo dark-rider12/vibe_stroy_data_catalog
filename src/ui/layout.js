@@ -236,6 +236,18 @@ export function switchTab(btn, paneClass, parentId) {
     staleLegend.style.display = (paneClass === "pane-lineage" && isStaleActive) ? "inline-flex" : "none";
   }
 
+  // Показываем переключатель "Исходный скрипт" только на вкладке Скрипт
+  const scriptRawToggle = parent.querySelector(`#script-raw-toggle-${parentId}`);
+  if (scriptRawToggle) {
+    scriptRawToggle.style.display = paneClass === "pane-script" ? "inline-flex" : "none";
+  }
+
+  if (paneClass === "pane-script") {
+    if (window.initEnhancedScript) {
+      window.initEnhancedScript(parentId);
+    }
+  }
+
   // При переключении на вкладку "Колонки" пересчитываем позиции ресайзеров —
   // они могли быть инициализированы когда таблица была скрыта (height: 0)
   if (paneClass === "pane-cols") {

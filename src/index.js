@@ -28,7 +28,7 @@ import {
   closeStaleModal,
 } from "./lineage/tableLineageStale.js";
 import { initAiObfuscator, toggleAiObfuscatorModal } from "./ui/aiObfuscatorModal.js";
-import { switchScriptMode } from "./utils/scriptTransform.js";
+import { switchScriptMode, initEnhancedScript, toggleScriptRawMode } from "./utils/scriptTransform.js";
 import { initTemplateBuilder, toggleTemplateBuilder, clearBuilderTables, generateTemplateSql } from "./ui/templateBuilder.js";
 
 // Экспортируем данные и функции в глобальную область видимости,
@@ -36,6 +36,8 @@ import { initTemplateBuilder, toggleTemplateBuilder, clearBuilderTables, generat
 // window.catalogData is already set by the Python backend in index.html template
 window.switchTab = switchTab;
 window.switchScriptMode = switchScriptMode;
+window.initEnhancedScript = initEnhancedScript;
+window.toggleScriptRawMode = toggleScriptRawMode;
 window.toggleSidebar = toggleSidebar;
 window.initTableColumnResize = initTableColumnResize;
 window.navigateTo = navigateTo;

@@ -5121,6 +5121,44 @@ path.ln-edge-line {
     box-shadow: 0 1px 3px rgba(245, 158, 11, 0.2);
 }
 
+.script-raw-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background-color: #F8FAFC;
+    border: 1px solid #CBD5E1;
+    padding: 6px 14px;
+    border-radius: 20px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    font-weight: 600;
+    color: #475569;
+    transition: all 0.2s ease;
+}
+
+.script-raw-toggle:hover {
+    background-color: #F1F5F9;
+    border-color: #94A3B8;
+    color: #1E293B;
+}
+
+.script-raw-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #3B82F6;
+    cursor: pointer;
+    margin: 0;
+}
+
+.script-raw-toggle:has(input:checked) {
+    background-color: #EFF6FF;
+    border-color: #3B82F6;
+    color: #1D4ED8;
+    box-shadow: 0 1px 3px rgba(59, 130, 246, 0.15);
+}
+
 /* Node card content layout & time display */
 .ln-node {
     box-sizing: border-box !important;

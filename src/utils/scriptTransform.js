@@ -5,6 +5,7 @@
  */
 
 import { initScriptLineNumbers, initScriptWordHighlight } from "./helpers.js";
+import { enhanceSqlScript } from "./sqlEnhancer.js";
 
 /**
  * Экранирует спецсимволы в строке HTML (с fallback).
@@ -157,7 +158,20 @@ export function switchScriptMode(uniqueId, mode, btnElement) {
           </div>
         `;
       } else {
-        const { ddl, dml } = transformCtasScript(tableInfo, db, schema, table);
+        // Проверяем режим raw / enhanced
+        const isRaw = document.getElementById(`script-raw-cb-${uniqueId}`)?.checked;
+        let effectiveInfo = tableInfo;
+        if (!isRaw && tableInfo?.sql_script) {
+          const enhancedSql = enhanceSqlScript(tableInfo.sql_script, {
+            catalogData: window.catalogData,
+            currentDb: db,
+            currentSchema: schema,
+            currentTable: table
+          });
+          effectiveInfo = { ...tableInfo, sql_script: enhancedSql };
+        }
+
+        const { ddl, dml } = transformCtasScript(effectiveInfo, db, schema, table);
 
         testContainer.innerHTML = `
           <div class="test-script-window">
@@ -204,5 +218,112 @@ export function switchScriptMode(uniqueId, mode, btnElement) {
     }
 
     testContainer.style.display = "flex";
+  }
+}
+
+/**
+ * Инициализирует отображение улучшенного скрипта во вкладке «Скрипт».
+ * Вызывается при переключении на pane-script.
+ *
+ * @param {string} uniqueId - Уникальный ID таблицы
+ */
+export function initEnhancedScript(uniqueId) {
+  const pre = document.getElementById(`script-${uniqueId}`);
+  if (!pre) return;
+
+  const code = pre.querySelector("code");
+  if (!code) return;
+
+  // Если уже инициализировано (уже сохранены rawScript и enhancedScript), не пересчитываем повторно
+  if (code.dataset.enhancedInit) {
+    return;
+  }
+
+  // Получаем исходный текст скрипта
+  const rawScript = code.textContent;
+  if (!rawScript || !rawScript.trim()) return;
+
+  const db = pre.dataset.db || "";
+  const schema = pre.dataset.schema || "";
+  const table = pre.dataset.table || "";
+
+  // Проверяем наличие extra-скрипта (обвеса), чтобы улучшить основной скрипт и сохранить обвес
+  let mainScript = rawScript;
+  let extraScript = "";
+  const parts = rawScript.split("\n\n\n");
+  if (parts.length >= 2) {
+    mainScript = parts[0];
+    extraScript = parts.slice(1).join("\n\n\n");
+  }
+
+  // Улучшаем основной скрипт трансформации
+  const enhancedMain = enhanceSqlScript(mainScript, {
+    catalogData: window.catalogData,
+    currentDb: db,
+    currentSchema: schema,
+    currentTable: table
+  });
+
+  const enhancedScript = extraScript
+    ? `${enhancedMain}\n\n\n${extraScript}`
+    : enhancedMain;
+
+  // Сохраняем обе версии в датасете
+  code.dataset.rawScript = rawScript;
+  code.dataset.enhancedScript = enhancedScript;
+  code.dataset.enhancedInit = "true";
+
+  // Проверяем состояние чекбокса "Исходный скрипт"
+  const cb = document.getElementById(`script-raw-cb-${uniqueId}`);
+  const isRaw = cb ? cb.checked : false;
+
+  // Если чекбокс выключен (по умолчанию), показываем улучшенный скрипт
+  if (!isRaw) {
+    code.textContent = enhancedScript;
+    delete code.dataset.lineNumbersApplied;
+    initScriptLineNumbers(pre);
+    initScriptWordHighlight();
+  }
+}
+
+/**
+ * Переключает отображение между исходным и улучшенным скриптом.
+ *
+ * @param {string} uniqueId - Уникальный ID таблицы
+ * @param {boolean} isRaw - Включен ли чекбокс "Исходный скрипт"
+ */
+export function toggleScriptRawMode(uniqueId, isRaw) {
+  const pre = document.getElementById(`script-${uniqueId}`);
+  if (!pre) return;
+
+  const code = pre.querySelector("code");
+  if (!code) return;
+
+  // Если скрипт еще не был инициализирован
+  if (!code.dataset.enhancedInit) {
+    initEnhancedScript(uniqueId);
+  }
+
+  const rawScript = code.dataset.rawScript || code.textContent;
+  const enhancedScript = code.dataset.enhancedScript || rawScript;
+
+  // Переключаем содержимое
+  code.textContent = isRaw ? rawScript : enhancedScript;
+
+  // Сбрасываем флаг нумерации строк и перерисовываем
+  delete code.dataset.lineNumbersApplied;
+  initScriptLineNumbers(pre);
+  initScriptWordHighlight();
+
+  // Если контейнер Test (DDL + INSERT) открыт или отрендерен — обновляем его тоже
+  const testContainer = document.getElementById(`test-script-container-${uniqueId}`);
+  if (testContainer && testContainer.dataset.rendered) {
+    delete testContainer.dataset.rendered;
+    const switchBox = document.getElementById(`script-mode-switch-${uniqueId}`);
+    const activeModeBtn = switchBox?.querySelector(".script-mode-btn.active");
+    const mode = activeModeBtn?.dataset.mode || "dev";
+    if (mode === "test") {
+      switchScriptMode(uniqueId, "test", activeModeBtn);
+    }
   }
 }

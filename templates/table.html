@@ -73,6 +73,13 @@
             <span class="stale-toggle-custom-cb"></span>
             <span class="stale-toggle-text">The Time Has Come</span>
         </label>
+        {% if db_name != 'ods' and table_info.sql_script %}
+        <label class="script-raw-toggle" id="script-raw-toggle-{{ unique_id }}" style="display: none;" title="Показать исходный скрипт без улучшений">
+            <input type="checkbox" id="script-raw-cb-{{ unique_id }}" onchange="window.toggleScriptRawMode('{{ unique_id }}', this.checked)">
+            <span class="script-raw-custom-cb"></span>
+            <span class="script-raw-text">Исходный скрипт</span>
+        </label>
+        {% endif %}
     </div>
 
     <div class="tab-pane pane-cols active">
@@ -202,7 +209,7 @@
                 </div>
                 {% endif %}
             </div>
-            <pre class="ddl-block table-script-block" id="script-{{ unique_id }}"><code>{% if table_info.sql_script %}{{ table_info.sql_script | e }}{% endif %}{% if table_info.sql_script_extra %}{% if table_info.sql_script %}
+            <pre class="ddl-block table-script-block" id="script-{{ unique_id }}" data-unique-id="{{ unique_id }}" data-db="{{ db_name }}" data-schema="{{ schema_name }}" data-table="{{ table_name }}"><code>{% if table_info.sql_script %}{{ table_info.sql_script | e }}{% endif %}{% if table_info.sql_script_extra %}{% if table_info.sql_script %}
 
 
 {% endif %}{{ table_info.sql_script_extra | e }}{% endif %}</code></pre>
