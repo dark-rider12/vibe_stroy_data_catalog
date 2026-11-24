@@ -158,7 +158,7 @@ def _resolve_cte_source(cte_name: str, col_name: str, cte_map: dict, lookup: dic
     return resolved[0][0] if resolved else None
 
 
-def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, lookup: dict, default_db: str = ""):
+def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, lookup: dict, default_db: str = "", visited: set = None):
     """
     По имени CTE (или его алиасу в расширенном cte_map) и колонке находит
     реальные таблицы-источники И реальные имена колонок (не алиасы вывода like client_name).
@@ -172,6 +172,13 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
     UNION внутри подзапроса/CTE без хардкода таблиц.
     Рекурсивно спускается в цепочки CTE->CTE.
     """
+    if visited is None:
+        visited = set()
+    v_key = (cte_name.lower(), col_name.lower())
+    if v_key in visited or len(visited) > 80:
+        return []
+    visited = visited | {v_key}
+
     cte_info = cte_map.get(cte_name.lower())
     if not cte_info:
         return []
@@ -202,21 +209,26 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
             # Константа или системная функция — таблицы-источника нет
             if _is_constant_expression(_node_to_expr(inner)):
                 break
-            if isinstance(inner, exp.Column):
-                real_col = inner.name
-                tbl_ref = inner.table.lower() if inner.table else None
+
+            col_nodes = list(inner.find_all(exp.Column)) if not isinstance(inner, exp.Column) else [inner]
+            for c_node in col_nodes:
+                real_col = c_node.name
+                tbl_ref = c_node.table.lower() if c_node.table else None
                 if tbl_ref:
-                    if tbl_ref in branch_alias_map and branch_alias_map[tbl_ref] in lookup:
-                        result.append((branch_alias_map[tbl_ref], real_col))
-                    elif tbl_ref in cte_alias_map and cte_alias_map[tbl_ref] in lookup:
-                        result.append((cte_alias_map[tbl_ref], real_col))
+                    tid = branch_alias_map.get(tbl_ref) or cte_alias_map.get(tbl_ref)
+                    if tid and tid in lookup:
+                        result.append((tid, real_col))
+                    elif tid:
+                        tid_last = tid.split('.')[-1].lower()
+                        if tid_last in cte_map:
+                            result.extend(_resolve_cte_source_column(tid_last, real_col, cte_map, lookup, default_db, visited))
                     elif cte_map.get(tbl_ref):
                         # цепочка CTE->CTE или alias CTE из расширенного маппинга
-                        result.extend(_resolve_cte_source_column(tbl_ref, real_col, cte_map, lookup, default_db))
+                        result.extend(_resolve_cte_source_column(tbl_ref, real_col, cte_map, lookup, default_db, visited))
                     else:
-                        for tid in lookup.keys():
-                            if tid.split('.')[-1] == tbl_ref:
-                                result.append((tid, real_col))
+                        for l_tid in lookup.keys():
+                            if l_tid.split('.')[-1] == tbl_ref:
+                                result.append((l_tid, real_col))
                                 break
                 else:
                     # Непроквалифицированная колонка — первая реальная таблица ветки
@@ -225,14 +237,11 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
                         if tid and tid in lookup:
                             result.append((tid, real_col))
                             break
-            else:
-                # Сложное выражение (функция, каст, конкатенация, ...) — берём
-                # первую реальную таблицу ветки, имя колонки оставляем запрошенным
-                for bt in branch_sel.find_all(exp.Table):
-                    tid = _get_table_id(bt, default_db)
-                    if tid and tid in lookup:
-                        result.append((tid, col_name))
-                        break
+                        elif tid:
+                            tid_last = tid.split('.')[-1].lower()
+                            if tid_last in cte_map:
+                                result.extend(_resolve_cte_source_column(tid_last, real_col, cte_map, lookup, default_db, visited))
+
             # Одна колонка на ветку UNION — переходим к следующей ветке
             break
 
@@ -245,7 +254,21 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
             if tid in lookup:
                 result.append((tid, col_name))
                 break
-    return result
+            else:
+                tid_last = tid.split('.')[-1].lower()
+                if tid_last in cte_map:
+                    result.extend(_resolve_cte_source_column(tid_last, col_name, cte_map, lookup, default_db, visited))
+                    if result:
+                        break
+
+    # Дедупликация с сохранением порядка
+    deduped = []
+    seen = set()
+    for item in result:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
 
 
 _DEFAULT_SCHEMAS = {"core", "calc", "public", "ods", "dds", "dm", "sandbox_1", "sandbox_2", "sandbox_3"}
@@ -361,6 +384,12 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                     inner_sql = _node_to_expr(inner)
                     inner_sql = _strip_sql_comments(inner_sql)
                     inner_sql = inner_sql.replace('"DWH".', '').replace('"', '')
+
+                    next_visited = set(visited) | {cycle_key}
+                    local_subqs = _cte_info.get('subqueries', {})
+                    if local_subqs:
+                        inner_sql = _resolve_cte_refs(inner_sql, local_subqs, None, lookup, default_db, next_visited, schema_lookahead, depth + 1)
+
                     inner_sql_lower = inner_sql.lower()
                     for ak in sorted(branch_amap.keys(), key=len, reverse=True):
                         if ak not in inner_sql_lower:
@@ -379,7 +408,7 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                             flags=re.IGNORECASE
                         )
                         inner_sql_lower = inner_sql.lower()
-                    next_visited = set(visited) | {cycle_key}
+
                     inner_sql = _resolve_cte_refs(inner_sql, cte_map, branch_cte_aliases if branch_cte_aliases else None, lookup, default_db, next_visited, schema_lookahead, depth + 1)
                     branch_sqls.append((pending_op, inner_sql))
                     break
@@ -467,7 +496,12 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
     target_table = None
     col_lineage = {}
     try:
-        parsed = sqlglot.parse_one(sql, read="postgres")
+        try:
+            parsed = sqlglot.parse_one(sql, read="postgres")
+        except Exception:
+            # Fallback со снятием комментариев, если парсинг с комментариями упал
+            sql_clean = _strip_sql_comments(sql)
+            parsed = sqlglot.parse_one(sql_clean, read="postgres")
 
         # Если скрипт состоит из нескольких выражений (DROP TABLE ...; CREATE TABLE ...),
         # sqlglot возвращает exp.Block. Извлекаем основное выражение Create, Insert или Select.
@@ -488,22 +522,39 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             item_db = (item.get("db_name") or default_db).lower()
             item_schema = (item.get("target_schema") or "").lower()
             item_tbl = (item.get("target_table") or "").lower()
-            if item_schema and item_tbl:
-                cand = f"{item_db}.{item_schema}.{item_tbl}"
+
+            if "." in item_tbl:
+                tbl_parts = item_tbl.split(".")
+                if not item_schema:
+                    item_schema = tbl_parts[-2].lower()
+                item_tbl_name = tbl_parts[-1].lower()
+            else:
+                item_tbl_name = item_tbl
+
+            if item_schema and item_tbl_name:
+                cand = f"{item_db}.{item_schema}.{item_tbl_name}"
                 if cand in lookup:
                     target_table = cand
                 else:
                     for k in lookup.keys():
                         parts = k.split('.')
-                        if len(parts) == 3 and parts[1] == item_schema and parts[2] == item_tbl:
+                        if len(parts) == 3 and parts[1] == item_schema and parts[2] == item_tbl_name:
                             target_table = k
                             break
-            elif item_tbl:
+
+            # Если всё ещё не нашли — ищем по имени таблицы внутри item_db (среди любых схем)
+            if (not target_table or target_table not in lookup) and item_tbl_name:
                 for k in lookup.keys():
                     parts = k.split('.')
-                    if len(parts) == 3 and parts[0] == item_db and parts[2] == item_tbl:
+                    if len(parts) == 3 and parts[0] == item_db and parts[2] == item_tbl_name:
                         target_table = k
                         break
+
+            # Если и в item_db не нашли — ищем по уникальному имени таблицы во всём каталоге
+            if (not target_table or target_table not in lookup) and item_tbl_name:
+                candidates = [k for k in lookup.keys() if k.split('.')[-1] == item_tbl_name]
+                if len(candidates) == 1:
+                    target_table = candidates[0]
 
         if not target_table or target_table not in lookup:
             return (None, None, None)
@@ -602,11 +653,40 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                     if tbl.alias:
                         cte_direct_aliases[tbl.alias.lower()] = tname
                     cte_direct_aliases[tname] = tname
+
+                # Собираем подзапросы и LATERAL внутри CTE
+                cte_subqueries = {}
+                for subq in cte_body.find_all(exp.Subquery):
+                    w = subq.find_ancestor(exp.With)
+                    if w is not None and w is not with_root:
+                        continue
+                    sub_alias = subq.alias
+                    if not sub_alias and isinstance(subq.parent, exp.Lateral) and subq.parent.alias:
+                        sub_alias = subq.parent.alias
+                    if not sub_alias:
+                        continue
+                    subq_b = subq.this
+                    if not isinstance(subq_b, (exp.Select, exp.Union)):
+                        continue
+                    sub_amap = {}
+                    for tbl in subq_b.find_all(exp.Table):
+                        f_tid = _get_table_id(tbl, default_db)
+                        if f_tid:
+                            if tbl.alias:
+                                sub_amap[tbl.alias.lower()] = f_tid
+                            sub_amap[tbl.name.lower()] = f_tid
+                    cte_subqueries[sub_alias.lower()] = {
+                        'name': sub_alias.lower(),
+                        'select': subq_b,
+                        'alias_map': sub_amap
+                    }
+
                 cte_map[cte_name] = {
                     'name': cte_name,
                     'select': cte_body,
                     'alias_map': cte_alias_map,
-                    'cte_aliases': cte_direct_aliases
+                    'cte_aliases': cte_direct_aliases,
+                    'subqueries': cte_subqueries
                 }
 
             # Второй проход: рекурсивно разворачиваем ссылки CTE→CTE в alias_map.
@@ -1031,6 +1111,35 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                     entry = {"source_table": src_tbl_str, "source_column": sc["column"]}
                     if entry not in col_lineage[target_col]["sources"]:
                         col_lineage[target_col]["sources"].append(entry)
+
+        # Быстрое извлечение физических источников из вычисленного expression_sql:
+        # вместо перебора тысяч таблиц через regex компиляцию в цикле (O(N_tables)),
+        # сканируем строку за 1 проход и ищем кандидатов в словаре lookup за O(1).
+        if lookup:
+            schema_tbl_map = {f"{s.lower()}.{t.lower()}": (db, s, t) for db, s, t in lookup.values()}
+            for t_col, col_info in col_lineage.items():
+                expr_str = col_info.get("expression")
+                if not expr_str:
+                    continue
+                # 1. Ссылки вида db.schema.table.column
+                for m in re.finditer(r'(?<![.\w])([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)', expr_str):
+                    cand_tid = f"{m.group(1)}.{m.group(2)}.{m.group(3)}".lower()
+                    if cand_tid in lookup:
+                        db_orig, schema_orig, name_orig = lookup[cand_tid]
+                        full_ref = f"{db_orig}.{schema_orig}.{name_orig}"
+                        entry = {"source_table": full_ref, "source_column": m.group(4)}
+                        if entry not in col_info["sources"]:
+                            col_info["sources"].append(entry)
+                # 2. Ссылки вида schema.table.column
+                for m in re.finditer(r'(?<![.\w])([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)(?!\.[a-zA-Z0-9_])', expr_str):
+                    st_key = f"{m.group(1).lower()}.{m.group(2).lower()}"
+                    if st_key in schema_tbl_map:
+                        db_orig, schema_orig, name_orig = schema_tbl_map[st_key]
+                        full_ref = f"{db_orig}.{schema_orig}.{name_orig}"
+                        entry = {"source_table": full_ref, "source_column": m.group(3)}
+                        if entry not in col_info["sources"]:
+                            col_info["sources"].append(entry)
+
         return (target_table, col_lineage, None)
     except Exception as e:
         err_line = str(e).strip().split('\n')[0].strip()

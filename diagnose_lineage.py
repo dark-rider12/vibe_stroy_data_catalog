@@ -324,6 +324,14 @@ class SqlSanitizer:
             if tbl.alias:
                 tbl.set("alias", exp.TableAlias(this=exp.to_identifier(self.get_alias(tbl.alias))))
 
+        # 3a. Обезличивание алиасов подзапросов и LATERAL
+        for subq in copied.find_all(exp.Subquery):
+            if subq.alias:
+                subq.set("alias", exp.TableAlias(this=exp.to_identifier(self.get_alias(subq.alias))))
+        for lat in copied.find_all(exp.Lateral):
+            if lat.alias:
+                lat.set("alias", exp.TableAlias(this=exp.to_identifier(self.get_alias(lat.alias))))
+
         # 4. Обезличивание колонок
         for col in copied.find_all(exp.Column):
             c_name = col.name.lower()
