@@ -47,57 +47,88 @@ def _node_to_expr(node) -> str:
 
 def _strip_sql_comments(sql: str) -> str:
     """
-    Убирает SQL-комментарии из выражения, не трогая строковые литералы.
+    Удаляет однострочные (--) и многострочные (/* */) комментарии из SQL,
+    гарантируя отсутствие чувствительных данных и сохраняя строковые литералы
+    (в одинарных, двойных и доллар-кавычках) и структуру строк.
     """
     if not sql:
-        return ''
-
+        return ""
     result = []
     i = 0
     length = len(sql)
     in_single_quote = False
     in_double_quote = False
+    in_dollar_quote = False
+    dollar_tag = ""
     in_line_comment = False
     in_block_comment = False
 
     while i < length:
         char = sql[i]
-        next_char = sql[i + 1] if i + 1 < length else ''
+        next_char = sql[i + 1] if i + 1 < length else ""
 
+        # Внутри строчного комментария --
         if in_line_comment:
-            if char in '\r\n':
+            if char in "\r\n":
                 in_line_comment = False
                 result.append(char)
             i += 1
             continue
 
+        # Внутри блочного комментария /* ... */
         if in_block_comment:
-            if char == '*' and next_char == '/':
+            if char == "*" and next_char == "/":
                 in_block_comment = False
                 i += 2
             else:
+                if char in "\r\n":
+                    result.append(char)  # сохраняем перевод строки для точности
                 i += 1
             continue
 
-        if not in_single_quote and not in_double_quote:
-            if char == '-' and next_char == '-':
+        # Проверка dollar-quoted strings: $tag$...$tag$ или $$...$$
+        if not in_single_quote and not in_double_quote and not in_dollar_quote:
+            if char == "$":
+                m = re.match(r"^\$([a-zA-Z0-9_]*)\$", sql[i:])
+                if m:
+                    dollar_tag = m.group(0)
+                    in_dollar_quote = True
+                    result.append(dollar_tag)
+                    i += len(dollar_tag)
+                    continue
+        elif in_dollar_quote:
+            if sql[i:].startswith(dollar_tag):
+                result.append(dollar_tag)
+                i += len(dollar_tag)
+                in_dollar_quote = False
+                dollar_tag = ""
+                continue
+            result.append(char)
+            i += 1
+            continue
+
+        # Начало комментариев (вне строк)
+        if not in_single_quote and not in_double_quote and not in_dollar_quote:
+            if char == "-" and next_char == "-":
                 in_line_comment = True
                 i += 2
                 continue
-            if char == '/' and next_char == '*':
+            if char == "/" and next_char == "*":
                 in_block_comment = True
                 i += 2
                 continue
 
         result.append(char)
 
-        if char == "'" and not in_double_quote:
+        # Обработка строк в одинарных кавычках
+        if char == "'" and not in_double_quote and not in_dollar_quote:
             if in_single_quote and next_char == "'":
                 result.append(next_char)
                 i += 2
                 continue
             in_single_quote = not in_single_quote
-        elif char == '"' and not in_single_quote:
+        # Обработка строк в двойных кавычках
+        elif char == '"' and not in_single_quote and not in_dollar_quote:
             if in_double_quote and next_char == '"':
                 result.append(next_char)
                 i += 2
@@ -106,12 +137,7 @@ def _strip_sql_comments(sql: str) -> str:
 
         i += 1
 
-    cleaned = re.sub(r'\s+', ' ', ''.join(result)).strip()
-    # Убираем "осиротевшие" закрывающие маркеры блочных комментариев */
-    # Они могут появиться если sqlglot сохранил trailing-комментарий вида /*text*/
-    # и при этом открывающая часть /* уже была удалена строчным комментарием --
-    cleaned = re.sub(r'\s*\*/\s*', ' ', cleaned).strip()
-    return cleaned
+    return "".join(result)
 
 
 def _get_union_selects(node) -> list:
@@ -349,7 +375,11 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                 # Строим alias_map ЛОКАЛЬНО для этой ветки — у каждой ветки UNION
                 # могут быть одинаковые алиасы, ссылающиеся на разные таблицы
                 branch_amap = {}
+                part_cte = part.find_ancestor(exp.CTE)
                 for tbl in part.find_all(exp.Table):
+                    cte_ancestor = tbl.find_ancestor(exp.CTE)
+                    if cte_ancestor is not None and cte_ancestor is not part_cte:
+                        continue
                     full_tid = _get_table_id(tbl, default_db)
                     if full_tid:
                         if tbl.alias:
@@ -496,12 +526,30 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
     target_table = None
     col_lineage = {}
     try:
+        # Сначала очищаем комментарии через надежный стриппер:
+        # защищает от сбоев sqlglot на непарных кавычках внутри комментариев,
+        # кириллице и спецсимволах
+        sql_clean = _strip_sql_comments(sql).strip()
+        parsed = None
         try:
-            parsed = sqlglot.parse_one(sql, read="postgres")
-        except Exception:
-            # Fallback со снятием комментариев, если парсинг с комментариями упал
-            sql_clean = _strip_sql_comments(sql)
             parsed = sqlglot.parse_one(sql_clean, read="postgres")
+        except Exception:
+            try:
+                parsed = sqlglot.parse_one(sql, read="postgres")
+            except Exception:
+                try:
+                    stmts = sqlglot.parse(sql_clean, read="postgres")
+                    for st in stmts:
+                        if isinstance(st, (exp.Create, exp.Insert)):
+                            parsed = st
+                            break
+                    if not parsed and stmts:
+                        parsed = stmts[-1]
+                except Exception:
+                    parsed = None
+
+        if not parsed:
+            return (None, None, None)
 
         # Если скрипт состоит из нескольких выражений (DROP TABLE ...; CREATE TABLE ...),
         # sqlglot возвращает exp.Block. Извлекаем основное выражение Create, Insert или Select.
@@ -592,11 +640,13 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
         # Первая ветка используется для итерации по именам колонок и для lineage()
         first_select = union_branches[0] if union_branches else select_expr
 
-        # Build alias mapping (реальные таблицы из FROM/JOIN, без CTE)
-        # CTE-имена намеренно исключаем — они обрабатываются отдельно через cte_map
+        # Build alias mapping (реальные таблицы из FROM/JOIN основного запроса, без CTE)
+        # ВАЖНО: таблицы внутри тел CTE исключаем через find_ancestor(exp.CTE),
+        # чтобы одинаковые псевдонимы (например, A_2 в CTE и A_2 в основном запросе) не перезаписывали друг друга!
         alias_mapping = {}
         for tbl in parsed.find_all(exp.Table):
             if tbl is parsed.this: continue
+            if tbl.find_ancestor(exp.CTE) is not None: continue
             full_tid = _get_table_id(tbl, default_db)
             if full_tid:
                 if tbl.alias:
@@ -611,6 +661,8 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             # Пропускаем подзапросы без алиаса (скалярные подзапросы и т.п.)
             if not subq.alias:
                 continue
+            if subq.find_ancestor(exp.CTE) is not None:
+                continue
             subq_alias = subq.alias.lower()
             subq_body = subq.this  # exp.Select или exp.Union
             if not isinstance(subq_body, (exp.Select, exp.Union)):
@@ -618,6 +670,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             # Собираем таблицы внутри подзапроса
             subq_alias_map = {}
             for tbl in subq_body.find_all(exp.Table):
+                if tbl.find_ancestor(exp.CTE) is not None: continue
                 full_tid = _get_table_id(tbl, default_db)
                 if full_tid:
                     if tbl.alias:
@@ -641,8 +694,8 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 cte_alias_map = {}
                 cte_direct_aliases = {}
                 for tbl in cte_body.find_all(exp.Table):
-                    w = tbl.find_ancestor(exp.With)
-                    if w is not None and w is not with_root:
+                    cte_ancestor = tbl.find_ancestor(exp.CTE)
+                    if cte_ancestor is not None and cte_ancestor is not cte:
                         continue
                     full_tid = _get_table_id(tbl, default_db)
                     if full_tid:
@@ -731,6 +784,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
         cte_alias_to_name = {}
         for tbl in parsed.find_all(exp.Table):
             if tbl is parsed.this: continue
+            if tbl.find_ancestor(exp.CTE) is not None: continue
             if tbl.alias and tbl.name.lower() in cte_map:
                 cte_alias_to_name[tbl.alias.lower()] = tbl.name.lower()
 
@@ -803,8 +857,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             branch_alias_map = {}
             branch_direct_cte_aliases = {}
             for tbl in part.find_all(exp.Table):
-                w = tbl.find_ancestor(exp.With)
-                if w is not None and w is not with_root:
+                if tbl.find_ancestor(exp.CTE) is not None:
                     continue
                 full_tid = _get_table_id(tbl, default_db)
                 if full_tid:
@@ -1228,29 +1281,76 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
         results = [_analyze_single_query_lineage(item) for item in filtered_items]
 
     # Слияние результатов в catalog
+    success_tables = 0
+    total_col_exprs = 0
     for target_table, q_col_lineage, warning_msg in results:
         if warning_msg:
             print(warning_msg)
-        if not target_table or not q_col_lineage or target_table not in lookup:
+        if not target_table or not q_col_lineage:
             continue
 
-        db, schema, table = lookup[target_table]
+        matched_target = None
+        if target_table in lookup:
+            matched_target = target_table
+        else:
+            # Fallback 1: сопоставление по schema.table
+            parts = target_table.split('.')
+            if len(parts) >= 2:
+                st_cand = f"{parts[-2]}.{parts[-1]}".lower()
+                cands = [k for k in lookup.keys() if f"{k.split('.')[1]}.{k.split('.')[2]}" == st_cand]
+                if len(cands) == 1:
+                    matched_target = cands[0]
+                elif len(cands) > 1 and len(parts) >= 3:
+                    db_cand = parts[0].lower()
+                    db_cands = [k for k in cands if k.split('.')[0] == db_cand]
+                    if len(db_cands) == 1:
+                        matched_target = db_cands[0]
+
+            # Fallback 2: сопоставление по имени таблицы
+            if not matched_target and parts:
+                tbl_cand = parts[-1].lower()
+                cands = [k for k in lookup.keys() if k.split('.')[-1] == tbl_cand]
+                if len(cands) == 1:
+                    matched_target = cands[0]
+                elif len(cands) > 1 and len(parts) >= 2:
+                    db_cand = parts[0].lower()
+                    db_cands = [k for k in cands if k.split('.')[0] == db_cand]
+                    if len(db_cands) == 1:
+                        matched_target = db_cands[0]
+
+        if not matched_target or matched_target not in lookup:
+            if target_table:
+                print(f"   [Column Lineage Warning] Не удалось сопоставить целевую таблицу '{target_table}' ни с одним объектом в каталоге (всего объектов: {len(lookup)}).")
+            continue
+
+        db, schema, table = lookup[matched_target]
         table_obj = catalog[db][schema][table]
         table_col_lineage = table_obj.setdefault("column_lineage", {})
 
+        added_exprs = 0
         for col, col_data in q_col_lineage.items():
-            if col not in table_col_lineage:
-                table_col_lineage[col] = {
-                    "sources": list(col_data.get("sources", [])),
-                    "expression": col_data.get("expression")
-                }
-            else:
-                existing_sources = table_col_lineage[col].setdefault("sources", [])
-                for src in col_data.get("sources", []):
-                    if src not in existing_sources:
-                        existing_sources.append(src)
-                if not table_col_lineage[col].get("expression") and col_data.get("expression"):
-                    table_col_lineage[col]["expression"] = col_data["expression"]
+            col_norm = col.lower().strip().replace('"', '')
+            for k in {col_norm, col.lower()}:
+                if k not in table_col_lineage:
+                    table_col_lineage[k] = {
+                        "sources": list(col_data.get("sources", [])),
+                        "expression": col_data.get("expression")
+                    }
+                else:
+                    existing_sources = table_col_lineage[k].setdefault("sources", [])
+                    for src in col_data.get("sources", []):
+                        if src not in existing_sources:
+                            existing_sources.append(src)
+                    if not table_col_lineage[k].get("expression") and col_data.get("expression"):
+                        table_col_lineage[k]["expression"] = col_data["expression"]
+            if col_data.get("expression"):
+                added_exprs += 1
+
+        if added_exprs > 0:
+            success_tables += 1
+            total_col_exprs += added_exprs
+
+    print(f"   - Итого Column Lineage: {success_tables} таблиц успешно обогащены ({total_col_exprs} выражений).")
 
     return catalog
 

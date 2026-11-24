@@ -133,7 +133,8 @@
             </thead>
             <tbody>
                 {% for col in table_info.columns %}
-                {% set col_expr_data = table_info.column_lineage.get(col.name|lower) %}
+                {% set col_clean = col.name|lower|trim|replace('"', '') %}
+                {% set col_expr_data = table_info.column_lineage.get(col_clean) or table_info.column_lineage.get(col.name|lower) or table_info.column_lineage.get(col.name) %}
                 {% if col_expr_data and col_expr_data is mapping %}
                     {% set col_expr = col_expr_data.get('expression', '') %}
                 {% else %}

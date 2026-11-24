@@ -192,6 +192,7 @@ def load_sql_transformations(config: dict) -> list[dict]:
             cursor.execute(f"""
                 SELECT {cols}
                 FROM public.sql_inventory
+                ORDER BY updated_at DESC NULLS LAST
             """)
             rows = cursor.fetchall()
             print(f"   - [sql_inventory/{db_name}] Загружено {len(rows)} запросов")
