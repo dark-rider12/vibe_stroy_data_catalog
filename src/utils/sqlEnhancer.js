@@ -189,13 +189,30 @@ export function splitTopLevel(text, delimiter = ",") {
 }
 
 /**
+ * Проверяет, является ли токен-заглушка комментарием (однострочным или многострочным).
+ *
+ * @param {string} tokenPlaceholder - Токен вида ___SQL_TOKEN_0___
+ * @param {string[]} tokens - Массив оригинальных замаскированных строк
+ * @returns {boolean}
+ */
+export function isCommentToken(tokenPlaceholder, tokens) {
+  if (!tokenPlaceholder || !tokens || tokens.length === 0) return false;
+  const m = tokenPlaceholder.match(/^___SQL_TOKEN_(\d+)___$/);
+  if (!m) return false;
+  const idx = parseInt(m[1], 10);
+  const orig = tokens[idx];
+  return Boolean(orig && (orig.startsWith("--") || orig.startsWith("/*")));
+}
+
+/**
  * ПРАВИЛО 3: Явное добавление AS для псевдонимов колонок.
  * Преобразует неявные псевдонимы вида `a.col new_col` в `a.col AS new_col`.
  *
  * @param {string} selectListSql - Текст между SELECT и FROM
+ * @param {string[]} [tokens] - Массив токенов для безопасной изоляции комментариев
  * @returns {string}
  */
-export function ensureExplicitColumnAliasesInSelectList(selectListSql) {
+export function ensureExplicitColumnAliasesInSelectList(selectListSql, tokens = []) {
   if (!selectListSql) return "";
 
   // Разбиваем по запятым верхнего уровня
@@ -204,30 +221,63 @@ export function ensureExplicitColumnAliasesInSelectList(selectListSql) {
   const formattedItems = items.map((rawItem) => {
     // Выделяем начальные и конечные пробелы
     const matchLead = rawItem.match(/^(\s*)/);
-    const lead = matchLead ? matchLead[1] : "";
+    let lead = matchLead ? matchLead[1] : "";
     const matchTrail = rawItem.match(/(\s*)$/);
-    const trail = matchTrail ? matchTrail[1] : "";
-    const trimmed = rawItem.trim();
+    let trail = matchTrail ? matchTrail[1] : "";
+    let trimmed = rawItem.trim();
 
     if (!trimmed) return rawItem;
+
+    // Отделяем хвостовые комментарии (___SQL_TOKEN_...___, являющиеся комментариями)
+    // и пробелы/переносы строк между ними, сохраняя их в trail
+    while (true) {
+      const trailTokenMatch = trimmed.match(/(\s*___SQL_TOKEN_\d+___\s*)$/);
+      if (trailTokenMatch) {
+        const candidateToken = trailTokenMatch[1].trim();
+        if (isCommentToken(candidateToken, tokens)) {
+          trail = trailTokenMatch[1] + trail;
+          trimmed = trimmed.slice(0, trailTokenMatch.index).trimEnd();
+          continue;
+        }
+      }
+      break;
+    }
+
+    // Отделяем ведущие комментарии в lead
+    while (true) {
+      const leadTokenMatch = trimmed.match(/^(\s*___SQL_TOKEN_\d+___\s*)/);
+      if (leadTokenMatch) {
+        const candidateToken = leadTokenMatch[1].trim();
+        if (isCommentToken(candidateToken, tokens)) {
+          lead = lead + leadTokenMatch[1];
+          trimmed = trimmed.slice(leadTokenMatch[1].length).trimStart();
+          continue;
+        }
+      }
+      break;
+    }
+
+    if (!trimmed) {
+      return `${lead}${trail}`;
+    }
 
     // Если уже есть явный AS на верхнем уровне
     const asParts = splitTopLevel(trimmed, " ");
     const hasTopLevelAs = asParts.some((p) => p.trim().toUpperCase() === "AS");
     if (hasTopLevelAs) {
-      return rawItem;
+      return `${lead}${trimmed}${trail}`;
     }
 
     // Ищем структуру: <выражение> <псевдоним>
-    // Псевдоним должен быть валидным идентификатором
+    // Псевдоним должен быть валидным идентификатором и НЕ токеном-заглушкой
     const aliasRegex = /^(.*?[^,\s])\s+([a-zA-Z_][a-zA-Z0-9_]*)$/;
     const m = trimmed.match(aliasRegex);
     if (m) {
       const expr = m[1].trim();
       const alias = m[2].trim();
 
-      // Проверяем, что alias не является ключевым словом
-      if (!NON_ALIAS_KEYWORDS.has(alias.toUpperCase())) {
+      // Проверяем, что alias не является токеном-заглушкой и не является ключевым словом
+      if (!alias.startsWith("___SQL_TOKEN_") && !NON_ALIAS_KEYWORDS.has(alias.toUpperCase())) {
         // Проверяем, что expr не является просто DISTINCT
         if (expr.toUpperCase() !== "DISTINCT") {
           return `${lead}${expr} AS ${alias}${trail}`;
@@ -235,7 +285,7 @@ export function ensureExplicitColumnAliasesInSelectList(selectListSql) {
       }
     }
 
-    return rawItem;
+    return `${lead}${trimmed}${trail}`;
   });
 
   return formattedItems.join(",");
@@ -257,6 +307,10 @@ export function extractTablesAndAliases(fromAndJoinsSql) {
   while ((match = tableRegex.exec(fromAndJoinsSql)) !== null) {
     const rawTable = match[1];
     let alias = match[2];
+
+    if (alias && alias.startsWith("___SQL_TOKEN_")) {
+      alias = null;
+    }
 
     if (!alias) {
       // Если алиас не указан явно, используем имя таблицы без схемы
@@ -366,6 +420,11 @@ export function qualifyColumnsInSelectList(selectListSql, joinedTables) {
     const identRegex = /\b[a-zA-Z_][a-zA-Z0-9_]*\b/g;
 
     return rawItem.replace(identRegex, (ident, offset, fullStr) => {
+      // 0. Если это токен-заглушка
+      if (ident.startsWith("___SQL_TOKEN_")) {
+        return ident;
+      }
+
       const lowerIdent = ident.toLowerCase();
 
       // Проверяем контекст:
@@ -452,7 +511,7 @@ export function enhanceSqlScript(sql, options = {}) {
       let selectBody = selectMatch[2];
 
       // Правило 3: Явный AS для псевдонимов колонок
-      selectBody = ensureExplicitColumnAliasesInSelectList(selectBody);
+      selectBody = ensureExplicitColumnAliasesInSelectList(selectBody, tokens);
 
       // Правило 1: Квалификация полей (если есть соединенные таблицы и catalogData)
       if (catalogData) {

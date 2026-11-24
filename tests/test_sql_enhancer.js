@@ -56,7 +56,32 @@ function runTests() {
   assert(explicitAliases.includes("b.balance_amt AS blocked_amt"), `Ожидалось 'b.balance_amt AS blocked_amt'`);
   assert(explicitAliases.includes("count(*) AS total"), `Ожидалось 'count(*) AS total'`);
   assert(explicitAliases.includes("c.phone AS client_phone"), "Уже имеющийся явный AS client_phone должен сохраниться");
+
+  // Проверка защиты от вставки AS перед комментариями и строковыми литералами
+  const sqlWithCommentBlock = `CREATE TABLE dm.core.contract_account_link AS
+SELECT DISTINCT
+    cal.account_link_id,
+    c.class_name
+/*
+    ,source_system_id
+    ,is_active*/
+FROM dm.ext_dds.contract_account_link cal`;
+  const enhancedComment = enhanceSqlScript(sqlWithCommentBlock);
+  assert(!enhancedComment.includes("c.class_name AS /*"), `Ошибка: обнаружено 'c.class_name AS /*'. Получено:\n${enhancedComment}`);
+  assert(enhancedComment.includes("c.class_name\n/*") || enhancedComment.includes("c.class_name \n/*"), "Исходный комментарий должен остаться без AS");
+
+  // Проверка: реальный алиас с хвостовым комментарием должен получить AS перед алиасом, а не перед комментарием
+  const sqlAliasWithComment = `SELECT c.class_name my_col /* comment */ FROM t`;
+  const enhancedAliasComment = enhanceSqlScript(sqlAliasWithComment);
+  assert(enhancedAliasComment.includes("c.class_name AS my_col /* comment */"), `Ожидалось 'c.class_name AS my_col /* comment */'. Получено:\n${enhancedAliasComment}`);
+
+  // Проверка: строковое выражение в конце (col || 'abc') не должно получать AS
+  const sqlStringConcat = `SELECT col || 'abc' FROM tab`;
+  const enhancedStringConcat = enhanceSqlScript(sqlStringConcat);
+  assert(!enhancedStringConcat.includes("AS 'abc'"), `Строковый литерал не должен трактоваться как алиас. Получено:\n${enhancedStringConcat}`);
+
   console.log("  ✓ Неявные псевдонимы (expr alias) преобразованы в явные (expr AS alias)");
+  console.log("  ✓ Комментарии и строковые литералы надёжно защищены от ошибочной вставки AS");
 
   // 4. Тестирование квалификации полей (Column Qualification)
   console.log("\n4. Проверка квалификации полей по метаданным таблиц:");
