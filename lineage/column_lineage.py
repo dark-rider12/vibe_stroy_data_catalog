@@ -195,6 +195,61 @@ def _resolve_cte_source(cte_name: str, col_name: str, cte_map: dict, lookup: dic
     return resolved[0][0] if resolved else None
 
 
+def _expand_lateral_ast(node, lateral_asts: dict):
+    """
+    На копии AST заменяет ссылки на LATERAL-функции (tbl.col или неквалифицированный col)
+    на AST-выражение самой функции. Колонки реальных таблиц и литералы не затрагиваются.
+    """
+    if not lateral_asts or node is None:
+        return node
+    copied = node.copy()
+    if isinstance(copied, exp.Column):
+        tbl_ref = copied.table.lower() if copied.table else ""
+        col_name = copied.name.lower() if copied.name else ""
+        key = f"{tbl_ref}.{col_name}" if tbl_ref else col_name
+        if key in lateral_asts:
+            return lateral_asts[key].copy()
+        return copied
+    for col_node in list(copied.find_all(exp.Column)):
+        tbl_ref = col_node.table.lower() if col_node.table else ""
+        col_name = col_node.name.lower() if col_node.name else ""
+        key = f"{tbl_ref}.{col_name}" if tbl_ref else col_name
+        if key in lateral_asts:
+            col_node.replace(lateral_asts[key].copy())
+    return copied
+
+
+def _extract_select_lateral_asts(select_node) -> dict:
+    """
+    Собирает маппинг LATERAL-функций (исключая подзапросы) для конкретной ветки exp.Select:
+    {'col_9': AST_node, 'col_9.col_9': AST_node} или {'gs.d': AST_node, 'd': AST_node}.
+    """
+    laterals = {}
+    if not isinstance(select_node, exp.Select):
+        return laterals
+    for lat in select_node.find_all(exp.Lateral):
+        if lat.find_ancestor(exp.Select) is not select_node:
+            continue
+        if lat.this is None or isinstance(lat.this, exp.Subquery):
+            continue
+        lat_alias = lat.alias.lower() if lat.alias else ''
+        if not lat_alias:
+            continue
+        lat_expr = _expand_lateral_ast(lat.this, laterals) if laterals else lat.this
+        alias_node = lat.args.get("alias")
+        lat_cols = []
+        if isinstance(alias_node, exp.TableAlias) and alias_node.columns:
+            lat_cols = [c.name.lower() for c in alias_node.columns if getattr(c, "name", None)]
+        if lat_cols:
+            for col_name in lat_cols:
+                laterals[f"{lat_alias}.{col_name}"] = lat_expr
+                laterals[col_name] = lat_expr
+        else:
+            laterals[lat_alias] = lat_expr
+            laterals[f"{lat_alias}.{lat_alias}"] = lat_expr
+    return laterals
+
+
 def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, lookup: dict, default_db: str = "", visited: set = None):
     """
     По имени CTE (или его алиасу в расширенном cte_map) и колонке находит
@@ -237,15 +292,29 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
                     branch_alias_map[tbl.alias.lower()] = full_tid
                 branch_alias_map[tbl.name.lower()] = full_tid
 
+        branch_laterals = _extract_select_lateral_asts(sel)
+        matched_inner = None
+        has_star = False
         for sel_item in sel.selects:
+            if isinstance(sel_item, exp.Star) or (isinstance(sel_item, exp.Column) and isinstance(sel_item.this, exp.Star)):
+                has_star = True
+                continue
             sel_alias = sel_item.alias_or_name.lower() if sel_item.alias_or_name else ''
             if sel_alias != col_name.lower():
                 continue
             found_match = True
-            inner = sel_item.this if isinstance(sel_item, exp.Alias) else sel_item
+            matched_inner = sel_item.this if isinstance(sel_item, exp.Alias) else sel_item
+            break
+
+        if matched_inner is None and has_star and branch_laterals and col_name.lower() in branch_laterals:
+            found_match = True
+            matched_inner = branch_laterals[col_name.lower()]
+
+        if matched_inner is not None:
+            inner = _expand_lateral_ast(matched_inner, branch_laterals) if branch_laterals else matched_inner
             # Константа или системная функция — таблицы-источника нет
             if _is_constant_expression(_node_to_expr(inner)):
-                break
+                continue
 
             col_nodes = list(inner.find_all(exp.Column)) if not isinstance(inner, exp.Column) else [inner]
             for c_node in col_nodes:
@@ -278,9 +347,6 @@ def _resolve_cte_source_column(cte_name: str, col_name: str, cte_map: dict, look
                             tid_last = tid.split('.')[-1].lower()
                             if tid_last in cte_map:
                                 result.extend(_resolve_cte_source_column(tid_last, real_col, cte_map, lookup, default_db, visited))
-
-            # Одна колонка на ветку UNION — переходим к следующей ветке
-            break
 
     # Fallback: первая реальная таблица из CTE.
     # Срабатывает ТОЛЬКО если колонка в CTE вообще не найдена (found_match == False).
@@ -417,11 +483,23 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
                 # на реальные таблицы (напр. 'a' → 'dds.account_detail' вместо раскрытия через CTE).
                 # Вместо этого оставляем branch_amap пустым и передаём branch_cte_aliases
                 # в рекурсивный _resolve_cte_refs ниже.
+                branch_laterals = _extract_select_lateral_asts(part)
+                matched_inner = None
+                has_star = False
                 for sel_item in part.selects:
-                    sel_alias = sel_item.alias_or_name.lower() if sel_item.alias_or_name else ''
-                    if sel_alias != col_ref:
+                    if isinstance(sel_item, exp.Star) or (isinstance(sel_item, exp.Column) and isinstance(sel_item.this, exp.Star)):
+                        has_star = True
                         continue
-                    inner = sel_item.this if isinstance(sel_item, exp.Alias) else sel_item
+                    sel_alias = sel_item.alias_or_name.lower() if sel_item.alias_or_name else ''
+                    if sel_alias == col_ref:
+                        matched_inner = sel_item.this if isinstance(sel_item, exp.Alias) else sel_item
+                        break
+
+                if matched_inner is None and has_star and branch_laterals and col_ref in branch_laterals:
+                    matched_inner = branch_laterals[col_ref]
+
+                if matched_inner is not None:
+                    inner = _expand_lateral_ast(matched_inner, branch_laterals) if branch_laterals else matched_inner
                     inner_sql = _node_to_expr(inner)
                     inner_sql = _strip_sql_comments(inner_sql)
                     inner_sql = inner_sql.replace('"DWH".', '').replace('"', '')
@@ -452,7 +530,6 @@ def _resolve_cte_refs(expression_sql: str, cte_map: dict, cte_alias_to_name: dic
 
                     inner_sql = _resolve_cte_refs(inner_sql, cte_map, branch_cte_aliases if branch_cte_aliases else None, lookup, default_db, next_visited, schema_lookahead, depth + 1)
                     branch_sqls.append((pending_op, inner_sql))
-                    break
                 pending_op = ''
 
             if branch_sqls:
@@ -830,36 +907,6 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
         for k in subquery_map.keys():
             alias_mapping.pop(k, None)
 
-        # Строим маппинг LATERAL-функций: алиас → раскрытое SQL-выражение тела функции.
-        # Пример: CROSS JOIN LATERAL generate_series(a.open_date, ...) AS report_date
-        # → lateral_map['report_date'] = 'generate_series(dds.account_detail.open_date, ...)'
-        # Обходим всё дерево (включая CTE и подзапросы), поэтому работает для любого паттерна.
-        lateral_map = {}
-        for lat in parsed.find_all(exp.Lateral):
-            lat_alias = lat.alias.lower() if lat.alias else ''
-            if not lat_alias or lat.this is None:
-                continue
-            lat_sql = _node_to_expr(lat.this)
-            lat_sql = _strip_sql_comments(lat_sql)
-            lat_sql = re.sub(r'"[A-Za-z0-9_]+"\.', lambda m: m.group(0).replace('"', ''), lat_sql)
-            lat_sql = lat_sql.replace('"', '')
-            # Раскрываем алиасы таблиц внутри тела lateral через alias_mapping
-            for alias_key in sorted(alias_mapping.keys(), key=len, reverse=True):
-                full_tid = alias_mapping[alias_key]
-                if lookup and full_tid in lookup:
-                    db_orig, schema_orig, name_orig = lookup[full_tid]
-                    table_ref = f"{db_orig}.{schema_orig}.{name_orig}"
-                else:
-                    table_parts = full_tid.split('.')
-                    table_ref = '.'.join(table_parts[-3:]) if len(table_parts) >= 3 else '.'.join(table_parts)
-                lat_sql = re.sub(
-                    rf'(?<![\w.])({re.escape(alias_key)})\.',
-                    f'{table_ref}.',
-                    lat_sql,
-                    flags=re.IGNORECASE
-                )
-            lateral_map[lat_alias] = lat_sql
-
         # Расширенный маппинг: алиасы CTE тоже считаются CTE-ссылками,
         # inline-view подзапросы раскрываются тем же механизмом.
         effective_cte = dict(cte_map)
@@ -905,6 +952,7 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                     del branch_alias_map[k]
             # Если ветка не содержит своих таблиц — fallback на глобальный alias_mapping
             effective_alias_map = branch_alias_map if branch_alias_map else alias_mapping
+            branch_laterals = _extract_select_lateral_asts(part)
             branch = part
             if parsed_with and not branch.find(exp.With):
                 branch = part.copy()
@@ -912,7 +960,8 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
             branch_infos.append({
                 "select": branch,
                 "alias_map": effective_alias_map,
-                "cte_aliases": branch_direct_cte_aliases if branch_direct_cte_aliases else cte_alias_to_name
+                "cte_aliases": branch_direct_cte_aliases if branch_direct_cte_aliases else cte_alias_to_name,
+                "laterals": branch_laterals,
             })
 
         if parsed.args.get("with"):
@@ -948,7 +997,9 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 else:
                     raw_expr_node = branch_item
 
-                branch_sql = _node_to_expr(raw_expr_node)
+                branch_laterals = bi.get("laterals")
+                expr_node = _expand_lateral_ast(raw_expr_node, branch_laterals) if branch_laterals else raw_expr_node
+                branch_sql = _node_to_expr(expr_node)
                 branch_sql = _strip_sql_comments(branch_sql)
                 # Убираем артефакты квалификации: "DWH"., "ods"., "dds". и кавычки вокруг имён БД
                 branch_sql = re.sub(r'"[A-Za-z0-9_]+"\.', lambda m: m.group(0).replace('"', ''), branch_sql)
@@ -995,11 +1046,6 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 expression_sql = ''.join(result_parts)
             else:
                 expression_sql = ''
-
-            # Если expression_sql — это голый алиас LATERAL-функции (например, "report_date"),
-            # подставляем раскрытое выражение тела функции из lateral_map.
-            if expression_sql.strip().lower() in lateral_map:
-                expression_sql = lateral_map[expression_sql.strip().lower()]
 
             target_col = alias.lower()
 
@@ -1155,7 +1201,8 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 # FALLBACK для этой ветки: если lineage не нашел колонок — ищем в самом выражении
                 if not found and branch_raw:
                     try:
-                        for col_node in branch_raw.find_all(exp.Column):
+                        expanded_raw = _expand_lateral_ast(branch_raw, bi.get("laterals")) if bi.get("laterals") else branch_raw
+                        for col_node in expanded_raw.find_all(exp.Column):
                             col_name = col_node.name
                             col_table_alias = col_node.table.lower() if col_node.table else None
                             src_table = None
