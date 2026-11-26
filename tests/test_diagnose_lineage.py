@@ -184,7 +184,87 @@ def test_diagnose_lineage_cross_db_script_audit():
     print("✓ Тест межбазового аудита скриптов в diagnose_lineage.py успешно пройден!")
 
 
+def test_nested_and_orphaned_block_comments():
+    """
+    Проверяет поддержку вложенных блочных комментариев PostgreSQL (/* ... /* ... */ ... */),
+    '-- /*' и удаление осиротевших маркеров '*/' в strip_sql_comments / column_lineage / table_lineage.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from diagnose_lineage import LineageTracer, strip_sql_comments
+    from lineage.column_lineage import (
+        _strip_sql_comments,
+        _analyze_single_query_lineage,
+        _init_column_lineage_worker,
+        _build_schema_lookahead,
+    )
+    from lineage.table_lineage import compute_table_lineage
+
+    sql_nested = """
+    CREATE TABLE dm.core.target_nested AS
+    SELECT
+        s.id,
+        /* внешний комментарий
+           /* вложенный комментарий */
+           , null as leaked_fake_col
+        */
+        -- /* закомментированное открытие
+        , null as orphan_marker_col
+        */
+        , s.amount AS total_amount,
+        '/* строка_с_комментарием */' AS safe_str
+    FROM ods.core.src_orders s
+    """
+
+    for fn in (strip_sql_comments, _strip_sql_comments):
+        cleaned = fn(sql_nested)
+        assert "leaked_fake_col" not in cleaned, f"Inner nested comment leaked! {cleaned}"
+        assert "/*" not in cleaned.replace("'/* строка_с_комментарием */'", ""), f"Comment opener leaked! {cleaned}"
+        assert "*/" not in cleaned.replace("'/* строка_с_комментарием */'", ""), f"Orphan */ leaked! {cleaned}"
+        assert "'/* строка_с_комментарием */'" in cleaned, f"String literal damaged! {cleaned}"
+
+    # Проверяем diagnose_lineage
+    tracer = LineageTracer("dm.core.target_nested", sql_nested, {"databases": ["ods", "dds", "dm"]})
+    report = tracer.run_diagnostics()
+    assert "СТАТУС ВЫПОЛНЕНИЯ: SUCCESS" in report, f"Expected SUCCESS, got:\n{report}"
+    assert "leaked_fake_col" not in report
+
+    # Проверяем _analyze_single_query_lineage
+    lookup = {
+        "dm.core.target_nested": ("dm", "core", "target_nested"),
+        "ods.core.src_orders": ("ods", "core", "src_orders"),
+    }
+    schema_dict = {
+        "dm": {"core": {"target_nested": {"id": "string", "orphan_marker_col": "string", "total_amount": "string", "safe_str": "string"}}},
+        "ods": {"core": {"src_orders": {"id": "string", "amount": "string"}}},
+    }
+    tcols = {
+        "dm.core.target_nested": ["id", "orphan_marker_col", "total_amount", "safe_str"],
+        "ods.core.src_orders": ["id", "amount"],
+    }
+    _init_column_lineage_worker(lookup, schema_dict, _build_schema_lookahead(), tcols)
+    t_res, col_lin, warn = _analyze_single_query_lineage({
+        "db_name": "dm",
+        "target_schema": "core",
+        "target_table": "target_nested",
+        "query": sql_nested,
+    })
+    assert t_res == "dm.core.target_nested"
+    assert "leaked_fake_col" not in col_lin
+    assert "total_amount" in col_lin and "ods.core.src_orders" in [s["source_table"] for s in col_lin["total_amount"]["sources"]]
+
+    # Проверяем compute_table_lineage
+    cat = {
+        "ods": {"core": {"src_orders": {"lineage": {"upstream": set(), "downstream": set()}, "columns": []}}},
+        "dm": {"core": {"target_nested": {"lineage": {"upstream": set(), "downstream": set()}, "columns": []}}},
+    }
+    compute_table_lineage(cat, [{"db_name": "dm", "query": sql_nested}])
+    assert "ods.core.src_orders" in cat["dm"]["core"]["target_nested"]["lineage"]["upstream"]
+
+    print("✓ Тест вложенных и осиротевших блочных комментариев успешно пройден!")
+
+
 if __name__ == "__main__":
     test_diagnose_lineage()
     test_diagnose_lineage_command_fallback_anonymization()
     test_diagnose_lineage_cross_db_script_audit()
+    test_nested_and_orphaned_block_comments()

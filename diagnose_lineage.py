@@ -67,14 +67,20 @@ from generate_catalog import attach_sql_scripts, _extract_all_explicit_target_db
 # ОЧИСТКА КОММЕНТАРИЕВ (COMMENT STRIPPER / DATA PROTECTION)
 # =====================================================================
 
+_DOLLAR_TAG_RE = re.compile(r"\$([a-zA-Z0-9_]*)\$")
+
+
 def strip_sql_comments(sql: str) -> str:
     """
     Удаляет однострочные (--) и многострочные (/* */) комментарии из SQL,
-    гарантируя отсутствие чувствительных данных и сохраняя строковые литералы
-    (в одинарных, двойных и доллар-кавычках) и структуру строк.
+    поддерживает вложенные блочные комментарии PostgreSQL (/* ... /* ... */ ... */)
+    и удаляет осиротевшие маркеры '*/', гарантируя отсутствие чувствительных данных
+    и сохраняя строковые литералы и структуру строк.
     """
     if not sql:
         return ""
+    if "--" not in sql and "/*" not in sql and "*/" not in sql:
+        return sql
     result = []
     i = 0
     length = len(sql)
@@ -83,7 +89,7 @@ def strip_sql_comments(sql: str) -> str:
     in_dollar_quote = False
     dollar_tag = ""
     in_line_comment = False
-    in_block_comment = False
+    block_comment_depth = 0
 
     while i < length:
         char = sql[i]
@@ -97,10 +103,13 @@ def strip_sql_comments(sql: str) -> str:
             i += 1
             continue
 
-        # Внутри блочного комментария /* ... */
-        if in_block_comment:
-            if char == "*" and next_char == "/":
-                in_block_comment = False
+        # Внутри блочного комментария /* ... */ (с учётом вложенности в PostgreSQL)
+        if block_comment_depth > 0:
+            if char == "/" and next_char == "*":
+                block_comment_depth += 1
+                i += 2
+            elif char == "*" and next_char == "/":
+                block_comment_depth -= 1
                 i += 2
             else:
                 if char in "\r\n":
@@ -111,7 +120,7 @@ def strip_sql_comments(sql: str) -> str:
         # Проверка dollar-quoted strings: $tag$...$tag$ или $$...$$
         if not in_single_quote and not in_double_quote and not in_dollar_quote:
             if char == "$":
-                m = re.match(r"^\$([a-zA-Z0-9_]*)\$", sql[i:])
+                m = _DOLLAR_TAG_RE.match(sql, i)
                 if m:
                     dollar_tag = m.group(0)
                     in_dollar_quote = True
@@ -119,7 +128,7 @@ def strip_sql_comments(sql: str) -> str:
                     i += len(dollar_tag)
                     continue
         elif in_dollar_quote:
-            if sql[i:].startswith(dollar_tag):
+            if sql.startswith(dollar_tag, i):
                 result.append(dollar_tag)
                 i += len(dollar_tag)
                 in_dollar_quote = False
@@ -129,14 +138,18 @@ def strip_sql_comments(sql: str) -> str:
             i += 1
             continue
 
-        # Начало комментариев (вне строк)
+        # Начало/конец комментариев (вне строк)
         if not in_single_quote and not in_double_quote and not in_dollar_quote:
             if char == "-" and next_char == "-":
                 in_line_comment = True
                 i += 2
                 continue
             if char == "/" and next_char == "*":
-                in_block_comment = True
+                block_comment_depth = 1
+                i += 2
+                continue
+            if char == "*" and next_char == "/":
+                # Осиротевший закрывающий маркер '*/' (напр. при закомментированном '-- /*')
                 i += 2
                 continue
 
@@ -666,14 +679,14 @@ class LineageTracer:
             if foreign_hdr:
                 self.audit_log(
                     "CROSS_DB_HEADER",
-                    f"В тексте SQL явно указана целевая БД '{foreign_hdr[0]}', отличная от диагностируемой '{target_db}'! "
+                    f"В тексте SQL явно указана целевая БД {foreign_hdr[0]}, отличная от диагностируемой {target_db}! "
                     f"При генерации каталога такой скрипт должен отклоняться.",
                     "ERR",
                 )
             elif header_dbs:
                 self.audit_log(
                     "SQL_HEADER",
-                    f"Заголовок CREATE/INSERT явно соответствует целевой БД '{header_dbs[0]}'",
+                    f"Заголовок CREATE/INSERT явно соответствует целевой БД {header_dbs[0]}",
                     "OK",
                 )
             else:
@@ -882,7 +895,7 @@ class LineageTracer:
             sqlglot_logger.setLevel(prev_level)
 
     def _run_diagnostics_inner(self, capture_handler: _SqlglotWarningCapture) -> str:
-        self.log("INIT", f"Начало диагностики для объекта: '{self.target_arg}'")
+        self.log("INIT", f"Начало диагностики для объекта: {self.target_arg}")
         self.log("INIT", "Комментарии (-- и /* */) автоматически отфильтрованы (защита чувствительных данных)", "OK")
         self.log("INIT", f"Длина SQL-запроса (без комментариев): {len(self.raw_sql)} символов, строк: {len(self.raw_sql.splitlines())}")
 
@@ -916,7 +929,7 @@ class LineageTracer:
         try:
             parsed = sqlglot.parse_one(normalized_sql, read="postgres")
             if isinstance(parsed, exp.Command):
-                self.log("PARSE", "sqlglot откатился к разбору как 'Command' (встречен неподдерживаемый синтаксис)", "WARN")
+                self.log("PARSE", "sqlglot откатился к разбору как Command (встречен неподдерживаемый синтаксис)", "WARN")
             else:
                 self.log("PARSE", f"SQL успешно распарсен sqlglot. Корневой узел: {type(parsed).__name__}", "OK")
         except Exception as e:

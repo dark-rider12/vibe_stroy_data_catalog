@@ -181,7 +181,22 @@ def test_cross_db_script_and_lineage_protection():
     assert "sql_script" not in catalog_unlogged["dds"]["core"]["financial_account"], \
         "UNLOGGED/SELECT INTO dm.* leaked into dds!"
 
-    print("✓ Тест test_cross_db_script_protection успешно пройден!")
+    # 6. Регрессионный тест производительности: отсутствие квадратичного ReDoS на больших CTE-скриптах
+    import time
+    ctes = ",\n".join(
+        f"cte_{i} AS (SELECT col_1, col_2 FROM ods.core.src_tab WHERE col_1 IS NOT NULL)"
+        for i in range(70)
+    )
+    big_sql = "CREATE TABLE dds.core.big_tbl AS\nWITH " + ctes + "\nSELECT * FROM cte_69;"
+    while len(big_sql) < 95000:
+        big_sql += "\nUNION ALL\nSELECT col_1, col_2 FROM cte_1"
+    t0 = time.perf_counter()
+    extracted = _extract_all_explicit_target_dbs(big_sql)
+    elapsed = time.perf_counter() - t0
+    assert extracted == ["dds"], f"Unexpected extracted DBs: {extracted}"
+    assert elapsed < 0.2, f"Performance regression in _extract_all_explicit_target_dbs: {elapsed:.3f}s"
+
+    print(f"✓ Тест test_cross_db_script_protection успешно пройден! (95KB CTE extract: {elapsed * 1000:.2f} мс)")
 
 
 if __name__ == "__main__":

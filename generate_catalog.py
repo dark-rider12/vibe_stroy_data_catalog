@@ -29,6 +29,23 @@ if sys.platform == "win32" and __name__ == "__main__":
 
 import re
 
+_CREATE_TARGET_RE = re.compile(
+    r'\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+)?(?:MATERIALIZED\s+)?(?:TABLE|VIEW)\s+'
+    r'(?:IF\s+NOT\s+EXISTS\s+)?([\w"]+\.[\w"]+\.[\w"]+)',
+    re.IGNORECASE,
+)
+_INTO_TARGET_RE = re.compile(
+    r'\bINTO\s+(?:UNLOGGED\s+|TEMP\s+|TEMPORARY\s+)?(?:TABLE\s+)?([\w"]+\.[\w"]+\.[\w"]+)',
+    re.IGNORECASE,
+)
+_FROM_JOIN_TABLE_RE = re.compile(
+    r'(\b(?:FROM|JOIN)\s+)'          # ключевое слово
+    r'([\w]+\.[\w.]+)'               # schema.table или db.schema.table
+    r'(\b)',                          # граница слова / пробел после имени
+    re.IGNORECASE,
+)
+_LEADING_COMMENT_OR_EMPTY_RE = re.compile(r'^\s*(--|$)')
+
 def _ensure_db_in_create_statement(script: str, db_name: str) -> str:
     """
     Если в первом CREATE TABLE/VIEW указано только schema.table (без db_name) —
@@ -104,28 +121,20 @@ def _extract_all_explicit_target_dbs(script: str) -> list[str]:
     """
     Извлекает все явные db-префиксы из целевых инструкций (CREATE [UNLOGGED] TABLE/VIEW,
     INSERT INTO, SELECT ... INTO), если цель указана 3 компонентами (db.schema.table).
+    Использует линейные (O(N)) предкомпилированные паттерны без catastrophic backtracking.
     """
     if not script:
         return []
     cleaned = _strip_sql_comments(script)
-    patterns = (
-        re.compile(
-            r'\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+)?(?:MATERIALIZED\s+)?(?:TABLE|VIEW)\s+'
-            r'(?:IF\s+NOT\s+EXISTS\s+)?([\w"]+\.[\w"]+\.[\w"]+)',
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r'\bINSERT\s+INTO\s+([\w"]+\.[\w"]+\.[\w"]+)',
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r'\bSELECT\b[\s\S]*?\bINTO\s+(?:UNLOGGED\s+)?(?:TABLE\s+)?([\w"]+\.[\w"]+\.[\w"]+)',
-            re.IGNORECASE,
-        ),
-    )
     matches: list[tuple[int, str]] = []
-    for pat in patterns:
-        for m in pat.finditer(cleaned):
+    for m in _CREATE_TARGET_RE.finditer(cleaned):
+        parts = m.group(1).replace('"', '').split('.')
+        if len(parts) == 3:
+            db_part = parts[0].lower()
+            if db_part and db_part != "pg_temp":
+                matches.append((m.start(), db_part))
+    if "INTO" in cleaned.upper():
+        for m in _INTO_TARGET_RE.finditer(cleaned):
             parts = m.group(1).replace('"', '').split('.')
             if len(parts) == 3:
                 db_part = parts[0].lower()
@@ -200,14 +209,9 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
             return m.group(0)
 
         # Ищем FROM/JOIN + имя (2 или 3 компонента)
-        pattern = re.compile(
-            r'(\b(?:FROM|JOIN)\s+)'          # ключевое слово
-            r'([\w]+\.[\w.]+)'               # schema.table или db.schema.table
-            r'(\b)',                          # граница слова / пробел после имени
-            re.IGNORECASE
-        )
-        return pattern.sub(replacer, script)
+        return _FROM_JOIN_TABLE_RE.sub(replacer, script)
 
+    known_catalog_dbs = {d.lower() for d in catalog.keys() if d != "CorpusName"}
     attached_count = 0
     for item in sql_transformations:
         if item.get("source") != "public.sql_inventory":
@@ -261,19 +265,25 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
             continue
 
         db_name, schema_name, table_name = target
+        table_entry = catalog[db_name][schema_name][table_name]
+        # sql_loader.py читает строки в порядке updated_at DESC NULLS LAST:
+        # не перезаписываем уже прикреплённый более свежий скрипт старой записью.
+        if table_entry.get("sql_script"):
+            continue
+
         # Для вкладки "Скрипт" берём оригинальный текст (без замены foreign tables).
         # Так скрипт можно запустить в Postgres — ext_dds.table остаётся ext_dds.table.
         # Для lineage-анализа используется item["query"] с нормализованными именами.
-        raw = (item.get("raw_query") or item.get("query") or "").rstrip()
+        raw = (item.get("raw_query") or query).rstrip()
 
         # Дополнительная защита: проверяем ВСЕ целевые инструкции в SQL.
         # Если в самом SQL-запросе явно указана 3-составная целевая БД,
         # не совпадающая с db_name целевой таблицы в каталоге — отклоняем такой скрипт.
-        known_catalog_dbs = {d.lower() for d in catalog.keys() if d != "CorpusName"}
-        explicit_sql_dbs = []
-        for candidate_db in (_extract_all_explicit_target_dbs(raw) + _extract_all_explicit_target_dbs(query)):
-            if candidate_db not in explicit_sql_dbs:
-                explicit_sql_dbs.append(candidate_db)
+        explicit_sql_dbs = _extract_all_explicit_target_dbs(raw)
+        if query != raw:
+            for candidate_db in _extract_all_explicit_target_dbs(query):
+                if candidate_db not in explicit_sql_dbs:
+                    explicit_sql_dbs.append(candidate_db)
         foreign_dbs = [d for d in explicit_sql_dbs if d != db_name.lower() and (d in known_catalog_dbs or len(explicit_sql_dbs) == 1)]
         if foreign_dbs:
             print(
@@ -282,18 +292,12 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
             )
             continue
 
-        table_entry = catalog[db_name][schema_name][table_name]
-        # sql_loader.py читает строки в порядке updated_at DESC NULLS LAST:
-        # не перезаписываем уже прикреплённый более свежий скрипт старой записью.
-        if table_entry.get("sql_script"):
-            continue
-
         script = raw
         # Убираем ведущие закомментированные строки (-- ...) и пустые строки в начале скрипта.
         # Они выглядят как мусор во вкладке "Скрипт" — рабочий код должен идти первым.
         script_lines = script.splitlines()
         while script_lines:
-            if re.match(r'^\s*(--|$)', script_lines[0]):
+            if _LEADING_COMMENT_OR_EMPTY_RE.match(script_lines[0]):
                 script_lines.pop(0)
             else:
                 break
@@ -308,15 +312,16 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
         script = _ensure_db_in_create_statement(script, db_name)
         script = _add_db_to_foreign_schemas(script)
 
-        # Пост-проверка итогового текста перед сохранением в каталог
-        final_sql_dbs = _extract_all_explicit_target_dbs(script)
-        final_foreign_dbs = [d for d in final_sql_dbs if d != db_name.lower() and (d in known_catalog_dbs or len(final_sql_dbs) == 1)]
-        if final_foreign_dbs:
-            print(
-                f"   [Attach Script Warning] Пост-проверка отклонила итоговый скрипт с '{final_foreign_dbs[0]}.*' "
-                f"для '{db_name}.{schema_name}.{table_name}'."
-            )
-            continue
+        # Пост-проверка итогового текста перед сохранением в каталог (только если текст изменился)
+        if script.rstrip(';') != raw.rstrip(';'):
+            final_sql_dbs = _extract_all_explicit_target_dbs(script)
+            final_foreign_dbs = [d for d in final_sql_dbs if d != db_name.lower() and (d in known_catalog_dbs or len(final_sql_dbs) == 1)]
+            if final_foreign_dbs:
+                print(
+                    f"   [Attach Script Warning] Пост-проверка отклонила итоговый скрипт с '{final_foreign_dbs[0]}.*' "
+                    f"для '{db_name}.{schema_name}.{table_name}'."
+                )
+                continue
 
         # Store the processed script
         catalog[db_name][schema_name][table_name]["sql_script"] = script

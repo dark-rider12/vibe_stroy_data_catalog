@@ -99,12 +99,17 @@ def compute_table_lineage(catalog: dict, sql_transformations: list[dict], existi
                 full_key = f"{db_name}.{schema_name}.{table_name}".lower()
                 lookup[full_key] = (db_name, schema_name, table_name)
     
+    from lineage.column_lineage import _strip_sql_comments
+
     for item in sql_transformations:
         sql = item["query"]
         # default_db: база, из которой пришёл скрипт (для резолвинга таблиц без явного db)
         default_db = item.get("db_name", "dwh").lower()
         try:
-            parsed = sqlglot.parse_one(sql, read="postgres")
+            sql_clean = _strip_sql_comments(sql).strip()
+            parsed = sqlglot.parse_one(sql_clean, read="postgres")
+            if isinstance(parsed, exp.Command):
+                parsed = sqlglot.parse_one(sql, read="postgres")
             
             target_table = None
             source_tables = set()

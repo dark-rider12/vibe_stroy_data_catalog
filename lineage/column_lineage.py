@@ -12,6 +12,8 @@ from sqlglot import exp
 from sqlglot.optimizer.qualify import qualify
 from lineage.table_lineage import _get_table_id
 
+_DOLLAR_TAG_RE = re.compile(r"\$([a-zA-Z0-9_]*)\$")
+
 
 def _node_to_expr(node) -> str:
     """
@@ -48,11 +50,13 @@ def _node_to_expr(node) -> str:
 def _strip_sql_comments(sql: str) -> str:
     """
     Удаляет однострочные (--) и многострочные (/* */) комментарии из SQL,
-    гарантируя отсутствие чувствительных данных и сохраняя строковые литералы
-    (в одинарных, двойных и доллар-кавычках) и структуру строк.
+    поддерживает вложенные блочные комментарии PostgreSQL (/* ... /* ... */ ... */)
+    и удаляет осиротевшие маркеры '*/', сохраняя строковые литералы и структуру строк.
     """
     if not sql:
         return ""
+    if "--" not in sql and "/*" not in sql and "*/" not in sql:
+        return sql
     result = []
     i = 0
     length = len(sql)
@@ -61,7 +65,7 @@ def _strip_sql_comments(sql: str) -> str:
     in_dollar_quote = False
     dollar_tag = ""
     in_line_comment = False
-    in_block_comment = False
+    block_comment_depth = 0
 
     while i < length:
         char = sql[i]
@@ -75,10 +79,13 @@ def _strip_sql_comments(sql: str) -> str:
             i += 1
             continue
 
-        # Внутри блочного комментария /* ... */
-        if in_block_comment:
-            if char == "*" and next_char == "/":
-                in_block_comment = False
+        # Внутри блочного комментария /* ... */ (с учётом вложенности в PostgreSQL)
+        if block_comment_depth > 0:
+            if char == "/" and next_char == "*":
+                block_comment_depth += 1
+                i += 2
+            elif char == "*" and next_char == "/":
+                block_comment_depth -= 1
                 i += 2
             else:
                 if char in "\r\n":
@@ -89,7 +96,7 @@ def _strip_sql_comments(sql: str) -> str:
         # Проверка dollar-quoted strings: $tag$...$tag$ или $$...$$
         if not in_single_quote and not in_double_quote and not in_dollar_quote:
             if char == "$":
-                m = re.match(r"^\$([a-zA-Z0-9_]*)\$", sql[i:])
+                m = _DOLLAR_TAG_RE.match(sql, i)
                 if m:
                     dollar_tag = m.group(0)
                     in_dollar_quote = True
@@ -97,7 +104,7 @@ def _strip_sql_comments(sql: str) -> str:
                     i += len(dollar_tag)
                     continue
         elif in_dollar_quote:
-            if sql[i:].startswith(dollar_tag):
+            if sql.startswith(dollar_tag, i):
                 result.append(dollar_tag)
                 i += len(dollar_tag)
                 in_dollar_quote = False
@@ -107,14 +114,18 @@ def _strip_sql_comments(sql: str) -> str:
             i += 1
             continue
 
-        # Начало комментариев (вне строк)
+        # Начало/конец комментариев (вне строк)
         if not in_single_quote and not in_double_quote and not in_dollar_quote:
             if char == "-" and next_char == "-":
                 in_line_comment = True
                 i += 2
                 continue
             if char == "/" and next_char == "*":
-                in_block_comment = True
+                block_comment_depth = 1
+                i += 2
+                continue
+            if char == "*" and next_char == "/":
+                # Осиротевший закрывающий маркер '*/' (например, когда '/*' был закомментирован '-- /*')
                 i += 2
                 continue
 
