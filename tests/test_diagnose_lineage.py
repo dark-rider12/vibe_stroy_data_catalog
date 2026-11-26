@@ -60,5 +60,131 @@ def test_diagnose_lineage():
             os.remove(tmp_report)
 
 
+def test_diagnose_lineage_command_fallback_anonymization():
+    """
+    Проверяет, что при откате sqlglot к exp.Command или ошибке синтаксиса
+    ни сырые имена таблиц/колонок/схем/функций, ни литералы, ни предупреждения sqlglot
+    не утекают ни в отчёт, ни в консоль.
+    """
+    broken_sql = """
+    -- Секретный комментарий: Петров П.П.
+    create table core.secret_limits_daily as
+    with secret_cte_one as (
+        select
+            cc.secret_contract_id as secret_alias_col,
+            'СЕКРЕТНАЯ_СТРОКА' as secret_str_col,
+            $$ДОЛЛАР_СЕКРЕТ$$ as dollar_col,
+            custom_secret_udf(cc.secret_amount) as udf_col
+        from ods.secret_schema.secret_source_table cc
+    )
+    select * from secret_cte_one
+    DISTRIBUTED BY (secret_alias_col)
+    """
+    tmp_sql = "tests/.tmp_cmd_sample.sql"
+    tmp_report = "tests/.tmp_cmd_report.txt"
+    try:
+        with open(tmp_sql, "w", encoding="utf-8") as f:
+            f.write(broken_sql)
+
+        cmd = [
+            sys.executable,
+            "diagnose_lineage.py",
+            "--table", "dm.core.secret_limits_daily",
+            "--sql-file", tmp_sql,
+            "--out", tmp_report,
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        assert res.returncode == 0, f"diagnose_lineage failed on Command script: {res.stderr}"
+
+        # Проверяем, что консоль (stdout/stderr) не получила сырой SQL от логгера sqlglot
+        combined_console = (res.stdout or "") + "\n" + (res.stderr or "")
+        for leak in ("secret_limits_daily", "secret_cte_one", "secret_contract_id", "СЕКРЕТНАЯ_СТРОКА"):
+            assert leak not in combined_console, f"Sensitive token leaked to console: {leak}"
+
+        with open(tmp_report, "r", encoding="utf-8") as f:
+            report = f.read()
+
+        assert "--- [4. ОБЕЗЛИЧЕННЫЙ ВОСПРОИЗВОДИМЫЙ SQL-СКРИПТ] ---" in report, "Section 4 missing!"
+        sensitive_tokens = (
+            "secret_limits_daily",
+            "secret_cte_one",
+            "secret_contract_id",
+            "secret_alias_col",
+            "secret_str_col",
+            "secret_amount",
+            "secret_schema",
+            "secret_source_table",
+            "custom_secret_udf",
+            "СЕКРЕТНАЯ_СТРОКА",
+            "ДОЛЛАР_СЕКРЕТ",
+            "Петров",
+            "udf_col",
+            "dollar_col",
+        )
+        for token in sensitive_tokens:
+            assert token not in report, f"Sensitive token '{token}' leaked into report!\n{report}"
+
+        assert "SYNTAX_HINT" in report, "Expected SYNTAX_HINT diagnostic message for Command fallback!"
+        print("✓ Тест обезличивания при exp.Command и ParseError успешно пройден!")
+    finally:
+        if os.path.exists(tmp_sql):
+            os.remove(tmp_sql)
+        if os.path.exists(tmp_report):
+            os.remove(tmp_report)
+
+
+def test_diagnose_lineage_cross_db_script_audit():
+    """
+    Проверяет секцию [0. АУДИТ ИСТОЧНИКОВ СКРИПТА]:
+    - обнаружение CROSS_DB_HEADER при несовпадении CREATE TABLE dm.* и --table dds.*;
+    - обнаружение дублей и симуляцию attach_sql_scripts с полным обезличиванием.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from diagnose_lineage import LineageTracer
+
+    bad_sql = "CREATE TABLE dm.core.financial_account AS SELECT 1+1;"
+    inv_records = [
+        {
+            "source": "public.sql_inventory",
+            "db_name": "dds",
+            "target_schema": "core",
+            "target_table": "financial_account",
+            "query": bad_sql,
+            "raw_query": bad_sql,
+            "updated_at": "2026-11-26 12:00:00",
+        },
+        {
+            "source": "public.sql_inventory",
+            "db_name": "dm",
+            "target_schema": "core",
+            "target_table": "financial_account",
+            "query": bad_sql,
+            "raw_query": bad_sql,
+            "updated_at": "2026-11-26 12:05:00",
+        },
+    ]
+
+    tracer = LineageTracer(
+        "dds.core.financial_account",
+        bad_sql,
+        {"databases": ["ods", "dds", "dm"]},
+        db_connection=None,
+        inventory_records=inv_records,
+        existing_target_dbs={"dds", "dm"},
+    )
+    report = tracer.run_diagnostics()
+
+    assert "--- [0. АУДИТ ИСТОЧНИКОВ СКРИПТА (ВКЛАДКА «СКРИПТ»)] ---" in report
+    assert "CROSS_DB_HEADER" in report
+    assert "ATTACH_WARNING" in report
+    assert "ATTACH_SIMULATION" in report
+    for leak in ("financial_account", "dm", "dds"):
+        assert leak not in report, f"Sensitive db/table token '{leak}' leaked into audit report:\n{report}"
+
+    print("✓ Тест межбазового аудита скриптов в diagnose_lineage.py успешно пройден!")
+
+
 if __name__ == "__main__":
     test_diagnose_lineage()
+    test_diagnose_lineage_command_fallback_anonymization()
+    test_diagnose_lineage_cross_db_script_audit()

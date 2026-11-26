@@ -15,14 +15,16 @@ from config import load_config
 from metadata_loader import extract_metadata, load_source_system_map, load_source_system_details
 from sql_loader import load_sql_transformations
 from lineage.table_lineage import compute_table_lineage
-from lineage.column_lineage import compute_column_lineage, compute_column_sources
+from lineage.column_lineage import compute_column_lineage, compute_column_sources, _strip_sql_comments
 from site_builder import generate_html
 
 # Настройка кодировки для Windows-консолей
-if sys.platform == "win32":
+if sys.platform == "win32" and __name__ == "__main__":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
+    if getattr(sys.stdout, "encoding", "").lower() != "utf-8":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    if getattr(sys.stderr, "encoding", "").lower() != "utf-8":
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 
 
 import re
@@ -98,21 +100,74 @@ def _add_db_to_foreign_schemas(script: str) -> str:
     return script
 
 
+def _extract_all_explicit_target_dbs(script: str) -> list[str]:
+    """
+    Извлекает все явные db-префиксы из целевых инструкций (CREATE [UNLOGGED] TABLE/VIEW,
+    INSERT INTO, SELECT ... INTO), если цель указана 3 компонентами (db.schema.table).
+    """
+    if not script:
+        return []
+    cleaned = _strip_sql_comments(script)
+    patterns = (
+        re.compile(
+            r'\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+)?(?:MATERIALIZED\s+)?(?:TABLE|VIEW)\s+'
+            r'(?:IF\s+NOT\s+EXISTS\s+)?([\w"]+\.[\w"]+\.[\w"]+)',
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r'\bINSERT\s+INTO\s+([\w"]+\.[\w"]+\.[\w"]+)',
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r'\bSELECT\b[\s\S]*?\bINTO\s+(?:UNLOGGED\s+)?(?:TABLE\s+)?([\w"]+\.[\w"]+\.[\w"]+)',
+            re.IGNORECASE,
+        ),
+    )
+    matches: list[tuple[int, str]] = []
+    for pat in patterns:
+        for m in pat.finditer(cleaned):
+            parts = m.group(1).replace('"', '').split('.')
+            if len(parts) == 3:
+                db_part = parts[0].lower()
+                if db_part and db_part != "pg_temp":
+                    matches.append((m.start(), db_part))
+    matches.sort(key=lambda x: x[0])
+    seen = []
+    for _, db_part in matches:
+        if db_part not in seen:
+            seen.append(db_part)
+    return seen
+
+
+def _extract_explicit_target_db(script: str) -> str:
+    """
+    Извлекает явный db-префикс из первой целевой инструкции (CREATE TABLE/VIEW, INSERT INTO, SELECT INTO),
+    если имя цели указано тремя компонентами (db.schema.table). Иначе возвращает ''.
+    """
+    dbs = _extract_all_explicit_target_dbs(script)
+    return dbs[0] if dbs else ""
+
+
 def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
     """Добавляет к таблицам скрипты из public.sql_inventory для отображения в UI."""
     lookup = {}
-    # Маппинг schema → db_name (для всех схем в каталоге)
-    schema_to_db: dict[str, str] = {}
+    # Кандидаты по (schema, table) — используются ТОЛЬКО если db_name не задан и совпадение однозначно
+    schema_table_candidates: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    # Маппинг schema → список db_name (для _add_db_prefix_all без перепутывания БД)
+    schema_to_dbs: dict[str, list[str]] = {}
     for db_name, schemas in catalog.items():
         if db_name == "CorpusName":
             continue
         for schema_name, tables in schemas.items():
-            schema_to_db[schema_name.lower()] = db_name
+            s_lc = schema_name.lower()
+            dbs_list = schema_to_dbs.setdefault(s_lc, [])
+            if db_name not in dbs_list:
+                dbs_list.append(db_name)
             for table_name in tables.keys():
-                # Ключ: (db, schema, table) — точное совпадение
-                lookup[(db_name.lower(), schema_name.lower(), table_name.lower())] = (db_name, schema_name, table_name)
-                # Ключ: (schema, table) — для обратной совместимости, если db_name в item отсутствует
-                lookup[(schema_name.lower(), table_name.lower())] = (db_name, schema_name, table_name)
+                target_tuple = (db_name, schema_name, table_name)
+                # Ключ: (db, schema, table) — точное совпадение с учётом БД
+                lookup[(db_name.lower(), s_lc, table_name.lower())] = target_tuple
+                schema_table_candidates.setdefault((s_lc, table_name.lower()), []).append(target_tuple)
 
     def _add_db_prefix_all(script: str, current_db: str = "") -> str:
         """
@@ -134,10 +189,14 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
                 # Сначала проверяем: есть ли эта таблица в текущей БД скрипта
                 if current_db and (current_db.lower(), schema_lc, table_lc) in lookup:
                     return f"{keyword}{current_db}.{name}{alias}"
-                # Fallback: используем schema_to_db (для foreign-схем и т.д.)
-                db = schema_to_db.get(schema_lc)
-                if db:
-                    return f"{keyword}{db}.{name}{alias}"
+                # Fallback: только если таблица однозначно существует ровно в одной БД
+                cands = schema_table_candidates.get((schema_lc, table_lc), [])
+                if len(cands) == 1:
+                    return f"{keyword}{cands[0][0]}.{name}{alias}"
+                # Или если сама схема уникальна для одной БД
+                dbs_for_schema = schema_to_dbs.get(schema_lc, [])
+                if len(dbs_for_schema) == 1:
+                    return f"{keyword}{dbs_for_schema[0]}.{name}{alias}"
             return m.group(0)
 
         # Ищем FROM/JOIN + имя (2 или 3 компонента)
@@ -154,17 +213,50 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
         if item.get("source") != "public.sql_inventory":
             continue
 
-        item_db     = (item.get("db_name")       or "").lower()
-        target_schema = (item.get("target_schema") or "").lower()
-        target_table  = (item.get("target_table")  or "").lower()
+        item_db          = (item.get("db_name")       or "").strip().lower().replace('"', '')
+        target_schema    = (item.get("target_schema") or "").strip().lower().replace('"', '')
+        target_table_raw = (item.get("target_table")  or "").strip().lower().replace('"', '')
         query = item.get("query") or ""
-        if not target_schema or not target_table or not query:
+        if not target_table_raw or not query:
             continue
 
-        # Сначала ищем точно по (db, schema, table), затем fallback на (schema, table)
-        target = lookup.get((item_db, target_schema, target_table))
-        if not target:
-            target = lookup.get((target_schema, target_table))
+        tbl_parts = [p for p in target_table_raw.split('.') if p]
+        explicit_tbl_db = ""
+        if len(tbl_parts) >= 3:
+            explicit_tbl_db = tbl_parts[-3]
+            if not target_schema:
+                target_schema = tbl_parts[-2]
+            target_table = tbl_parts[-1]
+        elif len(tbl_parts) == 2:
+            if not target_schema:
+                target_schema = tbl_parts[0]
+            target_table = tbl_parts[1]
+        elif len(tbl_parts) == 1:
+            target_table = tbl_parts[0]
+        else:
+            continue
+
+        if not target_schema or not target_table:
+            continue
+
+        if item_db and explicit_tbl_db and item_db != explicit_tbl_db:
+            print(
+                f"   [Attach Script Warning] Пропуск скрипта: db_name='{item_db}' "
+                f"противоречит target_table='{target_table_raw}'."
+            )
+            continue
+
+        effective_db = item_db or explicit_tbl_db
+
+        # Защита от межбазового попадания скриптов:
+        # если БД известна (dds/dm), ищем СТРОГО внутри неё без fallback в чужую БД.
+        target = None
+        if effective_db:
+            target = lookup.get((effective_db, target_schema, target_table))
+        else:
+            cands = schema_table_candidates.get((target_schema, target_table), [])
+            if len(cands) == 1:
+                target = cands[0]
         if not target:
             continue
 
@@ -173,6 +265,29 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
         # Так скрипт можно запустить в Postgres — ext_dds.table остаётся ext_dds.table.
         # Для lineage-анализа используется item["query"] с нормализованными именами.
         raw = (item.get("raw_query") or item.get("query") or "").rstrip()
+
+        # Дополнительная защита: проверяем ВСЕ целевые инструкции в SQL.
+        # Если в самом SQL-запросе явно указана 3-составная целевая БД,
+        # не совпадающая с db_name целевой таблицы в каталоге — отклоняем такой скрипт.
+        known_catalog_dbs = {d.lower() for d in catalog.keys() if d != "CorpusName"}
+        explicit_sql_dbs = []
+        for candidate_db in (_extract_all_explicit_target_dbs(raw) + _extract_all_explicit_target_dbs(query)):
+            if candidate_db not in explicit_sql_dbs:
+                explicit_sql_dbs.append(candidate_db)
+        foreign_dbs = [d for d in explicit_sql_dbs if d != db_name.lower() and (d in known_catalog_dbs or len(explicit_sql_dbs) == 1)]
+        if foreign_dbs:
+            print(
+                f"   [Attach Script Warning] Скрипт из '{effective_db or '?'}' явно создаёт/загружает "
+                f"'{foreign_dbs[0]}.*' — отклонён для '{db_name}.{schema_name}.{table_name}'."
+            )
+            continue
+
+        table_entry = catalog[db_name][schema_name][table_name]
+        # sql_loader.py читает строки в порядке updated_at DESC NULLS LAST:
+        # не перезаписываем уже прикреплённый более свежий скрипт старой записью.
+        if table_entry.get("sql_script"):
+            continue
+
         script = raw
         # Убираем ведущие закомментированные строки (-- ...) и пустые строки в начале скрипта.
         # Они выглядят как мусор во вкладке "Скрипт" — рабочий код должен идти первым.
@@ -192,6 +307,17 @@ def attach_sql_scripts(catalog: dict, sql_transformations: list[dict]) -> dict:
         script = _add_db_prefix_all(script, current_db=db_name)
         script = _ensure_db_in_create_statement(script, db_name)
         script = _add_db_to_foreign_schemas(script)
+
+        # Пост-проверка итогового текста перед сохранением в каталог
+        final_sql_dbs = _extract_all_explicit_target_dbs(script)
+        final_foreign_dbs = [d for d in final_sql_dbs if d != db_name.lower() and (d in known_catalog_dbs or len(final_sql_dbs) == 1)]
+        if final_foreign_dbs:
+            print(
+                f"   [Attach Script Warning] Пост-проверка отклонила итоговый скрипт с '{final_foreign_dbs[0]}.*' "
+                f"для '{db_name}.{schema_name}.{table_name}'."
+            )
+            continue
+
         # Store the processed script
         catalog[db_name][schema_name][table_name]["sql_script"] = script
 

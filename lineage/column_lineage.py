@@ -559,47 +559,63 @@ def _analyze_single_query_lineage(item: dict) -> tuple:
                 parsed = main_stmt
 
         target_table = None
+        target_node = None
         if isinstance(parsed, exp.Create) and isinstance(parsed.this, (exp.Table, exp.Schema)):
+            target_node = parsed.this.this if isinstance(parsed.this, exp.Schema) else parsed.this
             target_table = _get_table_id(parsed.this, default_db)
         elif isinstance(parsed, exp.Insert):
+            target_node = parsed.this.this if isinstance(parsed.this, exp.Schema) else parsed.this
             target_table = _get_table_id(parsed.this, default_db)
+
+        item_db = (item.get("db_name") or "").strip().lower().replace('"', '')
+        # Защита от межбазового смешивания: если в SQL явно указана БД, отличная от item_db — пропускаем
+        if item_db and target_node and isinstance(target_node, exp.Table) and target_node.catalog:
+            sql_explicit_db = target_node.catalog.lower()
+            if sql_explicit_db != item_db:
+                return (None, None, f"   [Column Lineage Warning] Скрипт из БД '{item_db}' явно ссылается на целевую БД '{sql_explicit_db}' — пропущен.")
+        if item_db and target_table and target_table in lookup:
+            if target_table.split('.')[0] != item_db:
+                return (None, None, f"   [Column Lineage Warning] Скрипт из БД '{item_db}' ссылается на таблицу '{target_table}' другой БД — пропущен.")
 
         # Fallback по метаданным item (target_schema, target_table, db_name)
         # Если в SQL target_table не указан со схемой (CREATE TABLE table_name) или не совпал с каталогом:
+        # Строго внутри item_db (если он известен), без перепрыгивания в другую БД.
         if not target_table or target_table not in lookup:
-            item_db = (item.get("db_name") or default_db).lower()
-            item_schema = (item.get("target_schema") or "").lower()
-            item_tbl = (item.get("target_table") or "").lower()
+            eff_db = item_db or default_db
+            item_schema = (item.get("target_schema") or "").strip().lower().replace('"', '')
+            item_tbl = (item.get("target_table") or "").strip().lower().replace('"', '')
 
             if "." in item_tbl:
-                tbl_parts = item_tbl.split(".")
-                if not item_schema:
+                tbl_parts = [p for p in item_tbl.split(".") if p]
+                if not item_schema and len(tbl_parts) >= 2:
                     item_schema = tbl_parts[-2].lower()
                 item_tbl_name = tbl_parts[-1].lower()
             else:
                 item_tbl_name = item_tbl
 
             if item_schema and item_tbl_name:
-                cand = f"{item_db}.{item_schema}.{item_tbl_name}"
+                cand = f"{eff_db}.{item_schema}.{item_tbl_name}"
                 if cand in lookup:
                     target_table = cand
-                else:
-                    for k in lookup.keys():
-                        parts = k.split('.')
-                        if len(parts) == 3 and parts[1] == item_schema and parts[2] == item_tbl_name:
-                            target_table = k
-                            break
+                elif not item_db:
+                    cands = [
+                        k for k in lookup.keys()
+                        if len(k.split('.')) == 3 and k.split('.')[1] == item_schema and k.split('.')[2] == item_tbl_name
+                    ]
+                    if len(cands) == 1:
+                        target_table = cands[0]
 
-            # Если всё ещё не нашли — ищем по имени таблицы внутри item_db (среди любых схем)
-            if (not target_table or target_table not in lookup) and item_tbl_name:
-                for k in lookup.keys():
-                    parts = k.split('.')
-                    if len(parts) == 3 and parts[0] == item_db and parts[2] == item_tbl_name:
-                        target_table = k
-                        break
+            # Если всё ещё не нашли — ищем по имени таблицы строго внутри eff_db (среди любых схем)
+            if (not target_table or target_table not in lookup) and item_tbl_name and eff_db:
+                cands_in_db = [
+                    k for k in lookup.keys()
+                    if len(k.split('.')) == 3 and k.split('.')[0] == eff_db and k.split('.')[2] == item_tbl_name
+                ]
+                if len(cands_in_db) == 1:
+                    target_table = cands_in_db[0]
 
-            # Если и в item_db не нашли — ищем по уникальному имени таблицы во всём каталоге
-            if (not target_table or target_table not in lookup) and item_tbl_name:
+            # Межбазовый поиск по уникальному имени допускается только если item_db не задан вовсе
+            if (not target_table or target_table not in lookup) and item_tbl_name and not item_db:
                 candidates = [k for k in lookup.keys() if k.split('.')[-1] == item_tbl_name]
                 if len(candidates) == 1:
                     target_table = candidates[0]
@@ -1293,30 +1309,25 @@ def compute_column_lineage(catalog: dict, sql_transformations: list[dict], exist
         if target_table in lookup:
             matched_target = target_table
         else:
-            # Fallback 1: сопоставление по schema.table
+            # Fallback 1 и Fallback 2: если в target_table указана БД из каталога —
+            # ищем кандидатов СТРОГО внутри этой БД (без переноса между dds/dm).
             parts = target_table.split('.')
+            known_dbs = {k.split('.')[0] for k in lookup.keys()}
+            db_cand = parts[0].lower() if len(parts) >= 2 and parts[0].lower() in known_dbs else ""
+            scoped_keys = [k for k in lookup.keys() if not db_cand or k.split('.')[0] == db_cand]
+
             if len(parts) >= 2:
                 st_cand = f"{parts[-2]}.{parts[-1]}".lower()
-                cands = [k for k in lookup.keys() if f"{k.split('.')[1]}.{k.split('.')[2]}" == st_cand]
+                cands = [k for k in scoped_keys if f"{k.split('.')[1]}.{k.split('.')[2]}" == st_cand]
                 if len(cands) == 1:
                     matched_target = cands[0]
-                elif len(cands) > 1 and len(parts) >= 3:
-                    db_cand = parts[0].lower()
-                    db_cands = [k for k in cands if k.split('.')[0] == db_cand]
-                    if len(db_cands) == 1:
-                        matched_target = db_cands[0]
 
-            # Fallback 2: сопоставление по имени таблицы
+            # Fallback 2: сопоставление по имени таблицы (внутри scoped_keys)
             if not matched_target and parts:
                 tbl_cand = parts[-1].lower()
-                cands = [k for k in lookup.keys() if k.split('.')[-1] == tbl_cand]
+                cands = [k for k in scoped_keys if k.split('.')[-1] == tbl_cand]
                 if len(cands) == 1:
                     matched_target = cands[0]
-                elif len(cands) > 1 and len(parts) >= 2:
-                    db_cand = parts[0].lower()
-                    db_cands = [k for k in cands if k.split('.')[0] == db_cand]
-                    if len(db_cands) == 1:
-                        matched_target = db_cands[0]
 
         if not matched_target or matched_target not in lookup:
             if target_table:
